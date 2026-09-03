@@ -13,6 +13,7 @@ from app.knowledge.store import KnowledgeStore
 from app.live.events import EngineStatus, ToolCall, Transcript
 from app.live.gemini import GeminiLiveEngine
 from app.live.mock import MockLiveEngine
+from app.live.openai_rt import OpenAIRealtimeEngine
 from app.models import (
     Alert,
     Decision,
@@ -34,7 +35,12 @@ class LiveSessionManager:
         self.websocket = websocket
         self.session = session
         self.knowledge = knowledge
-        self.engine = MockLiveEngine() if settings.mock_mode else GeminiLiveEngine()
+        if settings.live_provider == "openai":
+            self.engine = OpenAIRealtimeEngine()
+        elif settings.live_provider == "gemini":
+            self.engine = GeminiLiveEngine()
+        else:
+            self.engine = MockLiveEngine()
         self._started = asyncio.get_running_loop().time()
 
     def _elapsed(self) -> float:

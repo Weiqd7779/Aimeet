@@ -23,6 +23,7 @@ export default function Home() {
         </div>
         <div className="flex items-center gap-3">
           {meeting.mockMode && <span className="rounded-full border border-amber-300/30 bg-amber-300/10 px-2.5 py-1 text-[10px] font-bold tracking-widest text-amber-200">MOCK</span>}
+          <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 text-[10px] font-bold tracking-widest text-cyan-200">LIVE: {meeting.liveProvider.toUpperCase()}</span>
           <span className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${meeting.status === "live" ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-200" : "border-white/10 bg-white/5 text-slate-400"}`}><Radio size={13} className={meeting.status === "live" ? "animate-pulse" : ""} /> {statusLabel[meeting.status]}</span>
           <button className="flex items-center gap-2 text-xs text-slate-400 hover:text-cyan-200" onClick={() => setComparison(!comparison)}>{comparison ? <ToggleRight className="text-cyan-300" size={22} /> : <ToggleLeft size={22} />} Compare with plain transcript</button>
           <CircleHelp className="hidden text-slate-500 sm:block" size={18} />

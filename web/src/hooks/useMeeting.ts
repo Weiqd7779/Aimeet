@@ -21,6 +21,7 @@ interface State {
   sessionId: string | null;
   status: SessionStatus;
   mockMode: boolean;
+  liveProvider: string;
   transcript: TranscriptEntry[];
   frames: Frame[];
   groundedEvents: GroundedEvent[];
@@ -34,7 +35,7 @@ type Action =
   | { type: "status"; status: SessionStatus }
   | { type: "session"; id: string }
   | { type: "event"; event: ServerEvent }
-  | { type: "health"; mockMode: boolean }
+  | { type: "health"; mockMode: boolean; liveProvider: string }
   | { type: "toast"; message: string | null }
   | { type: "report"; report: ReportEnvelope | null };
 
@@ -42,6 +43,7 @@ const initialState: State = {
   sessionId: null,
   status: "idle",
   mockMode: false,
+  liveProvider: "mock",
   transcript: [],
   frames: [],
   groundedEvents: [],
@@ -60,7 +62,7 @@ function replaceById<T extends { id: string }>(items: T[], item: T) {
 function reducer(state: State, action: Action): State {
   if (action.type === "status") return { ...state, status: action.status };
   if (action.type === "session") return { ...state, sessionId: action.id };
-  if (action.type === "health") return { ...state, mockMode: action.mockMode };
+  if (action.type === "health") return { ...state, mockMode: action.mockMode, liveProvider: action.liveProvider };
   if (action.type === "toast") return { ...state, toast: action.message };
   if (action.type === "report") return { ...state, report: action.report };
   if (action.type !== "event") return state;
@@ -114,7 +116,7 @@ export function useMeeting() {
   useEffect(() => {
     fetch(`${apiUrl()}/health`)
       .then((response) => response.json())
-      .then((payload: { mock_mode?: boolean }) => dispatch({ type: "health", mockMode: Boolean(payload.mock_mode) }))
+      .then((payload: { mock_mode?: boolean; live_provider?: string }) => dispatch({ type: "health", mockMode: Boolean(payload.mock_mode), liveProvider: payload.live_provider || "mock" }))
       .catch(() => dispatch({ type: "toast", message: "無法連線至 API" }));
   }, []);
 

@@ -20,4 +20,8 @@ app.include_router(router)
 async def health() -> dict[str, str | bool]:
     from app.config import settings
 
-    return {"status": "ok", "mock_mode": settings.mock_mode}
+    return {
+        "status": "ok",
+        "mock_mode": settings.mock_mode,
+        "live_provider": settings.live_provider,
+    }

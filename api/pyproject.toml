@@ -15,6 +15,7 @@ dependencies = [
     "python-multipart",
     "httpx",
     "rapidfuzz",
+    "numpy",
 ]
 
 [dependency-groups]
