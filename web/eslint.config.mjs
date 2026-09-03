@@ -5,9 +5,11 @@ import { fileURLToPath } from "node:url";
 const directory = dirname(fileURLToPath(import.meta.url));
 const compat = new FlatCompat({ baseDirectory: directory });
 
-export default [
+const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
     ignores: [".next/**", "out/**", "build/**", "next-env.d.ts"],
   },
 ];
+
+export default eslintConfig;

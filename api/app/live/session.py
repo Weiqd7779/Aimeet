@@ -87,6 +87,7 @@ class LiveSessionManager:
             if message_type == "audio":
                 await self.engine.send_audio(base64.b64decode(message["pcm16_b64"], validate=True))
             elif message_type == "frame":
+                jpeg_bytes = base64.b64decode(message["jpeg_b64"], validate=True)
                 frame = Frame(
                     ts=float(message.get("ts", self._elapsed())),
                     jpeg_b64=message["jpeg_b64"],
@@ -94,6 +95,7 @@ class LiveSessionManager:
                 )
                 self.session.frames.append(frame)
                 del self.session.frames[:-200]
+                await self.engine.send_frame(jpeg_bytes)
                 await self._emit("frame_ack", frame.model_dump(exclude={"jpeg_b64"}))
             elif message_type == "text":
                 await self.engine.send_text(str(message.get("text", "")))
@@ -157,7 +159,7 @@ class LiveSessionManager:
                 if constraint not in self.session.decision_state.constraints:
                     self.session.decision_state.constraints.append(constraint)
             hits = self.knowledge.search(f"{decision.topic} {decision.chosen}")
-            alerts = check_conflict(decision, hits)
+            alerts = await check_conflict(decision, hits)
             decision.conflicts.extend(alert.id for alert in alerts)
             self.session.alerts.extend(alerts)
             await self._emit("decision", decision.model_dump())

@@ -1,3 +1,5 @@
+import asyncio
+
 from app.conflict import check_conflict
 from app.knowledge.store import store
 from app.models import Decision
@@ -5,7 +7,7 @@ from app.models import Decision
 
 def test_cost_limit_conflict() -> None:
     decision = Decision(ts=15, topic="Q4 主打原型", chosen="Prototype B")
-    alerts = check_conflict(decision, store.search("Q4 主打原型 Prototype B"))
+    alerts = asyncio.run(check_conflict(decision, store.search("Q4 主打原型 Prototype B")))
 
     assert len(alerts) == 1
     assert alerts[0].kind == "conflict"
@@ -19,7 +21,7 @@ def test_direct_database_conflict() -> None:
         topic="API Gateway 資料存取",
         chosen="API Gateway 直接連資料庫",
     )
-    alerts = check_conflict(decision, store.search("API Gateway 直接連資料庫"))
+    alerts = asyncio.run(check_conflict(decision, store.search("API Gateway 直接連資料庫")))
 
     assert len(alerts) == 1
     assert alerts[0].kind == "conflict"
@@ -29,4 +31,4 @@ def test_direct_database_conflict() -> None:
 def test_prototype_c_is_within_cost_limit() -> None:
     decision = Decision(ts=15, topic="Q4 主打原型", chosen="Prototype C")
 
-    assert check_conflict(decision, store.search("Q4 主打原型 Prototype C")) == []
+    assert asyncio.run(check_conflict(decision, store.search("Q4 主打原型 Prototype C"))) == []

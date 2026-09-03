@@ -1,7 +1,6 @@
-import asyncio
 import json
+import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from google import genai
@@ -10,6 +9,8 @@ from google.genai import types
 from app.config import settings
 from app.knowledge.store import Chunk
 from app.models import Alert, Decision
+
+logger = logging.getLogger(__name__)
 
 COST_PATTERN = re.compile(
     r"(?P<option>Prototype\s+[A-Z])[^。\n]{0,50}?NT\$\s?(?P<cost>[\d,]+)",
@@ -113,16 +114,20 @@ async def _generate_live_conflict(decision: Decision, hits: list[Chunk]) -> list
     ]
 
 
-def _run_live(coro: Any) -> list[Alert]:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(asyncio.run, coro).result()
-
-
-def check_conflict(decision: Decision, hits: list[Chunk]) -> list[Alert]:
+async def check_conflict(decision: Decision, hits: list[Chunk]) -> list[Alert]:
+    alerts = _mock_conflicts(decision, hits)
     if settings.mock_mode:
-        return _mock_conflicts(decision, hits)
-    return _run_live(_generate_live_conflict(decision, hits))
+        return alerts
+    try:
+        live_alerts = await _generate_live_conflict(decision, hits)
+    except Exception:
+        logger.exception("Live conflict check failed")
+        return alerts
+    for live_alert in live_alerts:
+        if any(
+            alert.source == live_alert.source and alert.detail == live_alert.detail
+            for alert in alerts
+        ):
+            continue
+        alerts.append(live_alert)
+    return alerts
