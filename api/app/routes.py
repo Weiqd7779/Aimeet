@@ -3,13 +3,21 @@ import binascii
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
+from pydantic import BaseModel
 
+from app.config import settings
 from app.knowledge.store import store
 from app.live.session import LiveSessionManager
 from app.models import MeetingSession
+from app.synthesis.service import synthesize as synthesize_report
 
 router = APIRouter()
 sessions: dict[str, MeetingSession] = {}
+
+
+class SynthesisRequest(BaseModel):
+    model: str | None = None
+    force: bool = False
 
 
 @router.post("/sessions", status_code=201)
@@ -68,7 +76,39 @@ async def search_knowledge(q: str, k: int = 5) -> list[dict]:
 
 
 @router.post("/sessions/{session_id}/synthesize")
-async def synthesize(session_id: str) -> None:
-    if session_id not in sessions:
+async def synthesize(
+    session_id: str,
+    request: SynthesisRequest | None = None,
+) -> dict:
+    session = sessions.get(session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    raise HTTPException(status_code=501, detail="Synthesis is not implemented yet")
+    request = request or SynthesisRequest()
+    force = request.force
+    model = request.model
+    if session.report is None or force:
+        session.report = await synthesize_report(session, store, model=model)
+        session.report_model = model or (
+            settings.openai_model_complex
+            if any(decision.conflicts for decision in session.decision_state.decisions)
+            or len(session.decision_state.decisions) > 3
+            else settings.openai_model
+        )
+        session.report_mock = settings.synthesis_mock or not settings.openai_api_key
+    return {
+        "report": session.report.model_dump(mode="json"),
+        "model": session.report_model,
+        "mock": session.report_mock,
+    }
+
+
+@router.get("/sessions/{session_id}/report")
+async def get_report(session_id: str) -> dict:
+    session = sessions.get(session_id)
+    if session is None or session.report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return {
+        "report": session.report.model_dump(mode="json"),
+        "model": session.report_model,
+        "mock": session.report_mock,
+    }

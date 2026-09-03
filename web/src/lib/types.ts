@@ -89,9 +89,41 @@ export type ClientMessage =
   | { type: "ack_alert"; id: string; status: AlertStatus }
   | { type: "end" };
 
-export interface Report {
-  decisions: Decision[];
+export interface DecisionRow {
+  topic: string;
+  chosen: string;
+  alternatives: string[];
+  rationale: string;
+  status: DecisionStatus;
+  conflict_resolution: string | null;
+  sources: string[];
+  evidence_frame_ids: string[];
+  evidence_ts: number[];
+  confidence: number;
+}
+
+export interface WorkItem {
+  title: string;
+  body_markdown: string;
+  labels: string[];
+  assignee: string | null;
+  evidence_frame_ids: string[];
+  kind: "github_issue" | "jira_task";
+}
+
+export interface MeetingReport {
+  summary: string;
+  decision_table: DecisionRow[];
   mermaid: string;
-  prd: string;
-  work_items: { title: string; body: string; labels: string[] }[];
+  mermaid_caption: string;
+  prd_markdown: string;
+  work_items: WorkItem[];
+  open_questions: string[];
+  uncertainties: string[];
+}
+
+export interface ReportEnvelope {
+  report: MeetingReport;
+  model: string;
+  mock: boolean;
 }

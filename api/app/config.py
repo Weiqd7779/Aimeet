@@ -8,7 +8,9 @@ class Settings(BaseSettings):
     gemini_live_model: str = "gemini-3.1-flash-live-preview"
     gemini_text_model: str = "gemini-2.5-flash"
     openai_model: str = "gpt-5.6-luna"
+    openai_model_complex: str = "gpt-5.6-terra"
     mock_mode: bool = True
+    synthesis_mock: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -20,6 +22,8 @@ class Settings(BaseSettings):
     def set_default_mock_mode(self) -> "Settings":
         if "mock_mode" not in self.model_fields_set:
             self.mock_mode = not bool(self.gemini_api_key)
+        if "synthesis_mock" not in self.model_fields_set:
+            self.synthesis_mock = not bool(self.openai_api_key)
         return self
 
 

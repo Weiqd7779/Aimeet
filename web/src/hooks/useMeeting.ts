@@ -10,7 +10,7 @@ import type {
   Decision,
   Frame,
   GroundedEvent,
-  Report,
+  ReportEnvelope,
   ServerEvent,
   TranscriptEntry,
 } from "@/lib/types";
@@ -27,7 +27,7 @@ interface State {
   alerts: Alert[];
   decisions: Decision[];
   toast: string | null;
-  report: Report | null;
+  report: ReportEnvelope | null;
 }
 
 type Action =
@@ -36,7 +36,7 @@ type Action =
   | { type: "event"; event: ServerEvent }
   | { type: "health"; mockMode: boolean }
   | { type: "toast"; message: string | null }
-  | { type: "report"; report: Report | null };
+  | { type: "report"; report: ReportEnvelope | null };
 
 const initialState: State = {
   sessionId: null,
@@ -222,7 +222,7 @@ export function useMeeting() {
       showToast("報告產生失敗");
       return;
     }
-    dispatch({ type: "report", report: (await response.json()) as Report });
+    dispatch({ type: "report", report: (await response.json()) as ReportEnvelope });
   }, [showToast, state.sessionId]);
 
   useEffect(() => () => {

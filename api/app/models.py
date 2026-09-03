@@ -4,6 +4,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from app.synthesis.schemas import MeetingReport
+
 
 def new_id() -> str:
     return str(uuid4())
@@ -81,6 +83,9 @@ class MeetingSession(BaseModel):
     grounded_events: list[GroundedEvent] = Field(default_factory=list)
     alerts: list[Alert] = Field(default_factory=list)
     decision_state: DecisionState = Field(default_factory=DecisionState)
+    report: MeetingReport | None = None
+    report_model: str | None = None
+    report_mock: bool | None = None
 
 
 EventType = Literal[

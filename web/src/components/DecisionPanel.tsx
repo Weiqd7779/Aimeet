@@ -34,7 +34,7 @@ export function DecisionPanel({ meeting, dimmed = false }: { meeting: MeetingSta
           </article>
         ))}
       </div>
-      <button className="button-primary mt-auto w-full justify-center" disabled={meeting.status !== "ended"} onClick={meeting.generateReport}>Generate Report</button>
+      <button className="button-primary mt-auto w-full justify-center" disabled={meeting.status === "idle" || meeting.status === "connecting"} onClick={meeting.generateReport}>Generate Report</button>
     </section>
   );
 }

@@ -34,7 +34,7 @@ export default function Home() {
         <DecisionPanel meeting={meeting} dimmed={comparison} />
       </div>
       {meeting.toast && <div role="status" className="fixed bottom-5 left-1/2 z-30 -translate-x-1/2 rounded-lg border border-amber-300/30 bg-slate-900 px-4 py-3 text-sm text-amber-100 shadow-xl">{meeting.toast}</div>}
-      {meeting.report && <ReportDrawer report={meeting.report} onClose={meeting.closeReport} />}
+      {meeting.report && <ReportDrawer envelope={meeting.report} sessionId={meeting.sessionId} onClose={meeting.closeReport} />}
     </main>
   );
 }
