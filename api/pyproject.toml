@@ -1,0 +1,26 @@
+[project]
+name = "aimeet-api"
+version = "0.1.0"
+description = "FastAPI backend for the Live Multimodal Decision Agent POC."
+readme = { text = "Live Multimodal Decision Agent API.", content-type = "text/plain" }
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "websockets",
+    "pydantic",
+    "pydantic-settings",
+    "google-genai",
+    "openai",
+    "python-multipart",
+    "httpx",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+]
+
+[tool.ruff]
+line-length = 100
