@@ -1,0 +1,74 @@
+[
+  {
+    "ts": 3,
+    "speaker": "Alice",
+    "text": "我覺得這個手感比較好",
+    "tool": {
+      "name": "create_anchor",
+      "args": {
+        "target": "Prototype B",
+        "observation": "手感較好",
+        "speaker": "Alice",
+        "confidence": 0.96
+      }
+    }
+  },
+  {
+    "ts": 9,
+    "speaker": "Bob",
+    "text": "那個版本成本太高吧",
+    "tool": {
+      "name": "create_anchor",
+      "args": {
+        "target": "Prototype B",
+        "observation": "成本疑慮",
+        "speaker": "Bob",
+        "confidence": 0.91
+      }
+    }
+  },
+  {
+    "ts": 15,
+    "speaker": "Alice",
+    "text": "那我們就定 Prototype B 吧",
+    "tool": {
+      "name": "propose_decision",
+      "args": {
+        "topic": "Q4 主打原型",
+        "chosen": "Prototype B",
+        "alternatives": ["Prototype A", "Prototype C"],
+        "reasons_for": ["手感較好"],
+        "reasons_against": ["成本偏高"],
+        "constraints": []
+      }
+    }
+  },
+  {
+    "ts": 24,
+    "speaker": "Carol",
+    "text": "這一塊直接連資料庫比較快",
+    "tool": {
+      "name": "propose_decision",
+      "args": {
+        "topic": "API Gateway 資料存取",
+        "chosen": "API Gateway 直接連資料庫",
+        "alternatives": ["經過 service layer"],
+        "reasons_for": ["開發較快"],
+        "reasons_against": [],
+        "constraints": []
+      }
+    }
+  },
+  {
+    "ts": 32,
+    "speaker": "Bob",
+    "text": "請看第 4 頁",
+    "tool": {
+      "name": "notify_speaker",
+      "args": {
+        "message": "投影片尚未翻頁",
+        "kind": "slide_mismatch"
+      }
+    }
+  }
+]

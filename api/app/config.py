@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     openai_api_key: str = ""
     gemini_live_model: str = "gemini-3.1-flash-live"
+    gemini_text_model: str = "gemini-2.5-flash"
     openai_model: str = "gpt-5.6-luna"
     mock_mode: bool = True
 
