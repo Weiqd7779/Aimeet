@@ -125,7 +125,8 @@ class OpenAIRealtimeEngine:
         )
 
     async def send_text(self, text: str) -> None:
-        await self._response_done.wait()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._response_done.wait(), timeout=15)
         self._response_done.clear()
         await self._conn.conversation.item.create(
             item={

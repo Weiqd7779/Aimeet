@@ -5,12 +5,22 @@ from typing import Any
 
 from google import genai
 from google.genai import types
+from openai import AsyncOpenAI
+from pydantic import BaseModel
 
 from app.config import settings
 from app.knowledge.store import Chunk
 from app.models import Alert, Decision
 
 logger = logging.getLogger(__name__)
+
+
+class ConflictVerdict(BaseModel):
+    has_conflict: bool
+    title: str
+    detail: str
+    source_id: str
+
 
 COST_PATTERN = re.compile(
     r"(?P<option>Prototype\s+[A-Z])[^。\n]{0,50}?NT\$\s?(?P<cost>[\d,]+)",
@@ -74,7 +84,30 @@ def _mock_conflicts(decision: Decision, hits: list[Chunk]) -> list[Alert]:
     return alerts
 
 
-async def _generate_live_conflict(decision: Decision, hits: list[Chunk]) -> list[Alert]:
+def _conflict_prompt(decision: Decision, hits: list[Chunk]) -> str:
+    return (
+        "請檢查以下決策是否與知識庫衝突，只回傳 JSON。\n"
+        f"決策：{decision.model_dump_json()}\n"
+        f"來源：{json.dumps([hit.__dict__ for hit in hits], ensure_ascii=False)}"
+    )
+
+
+def _alert_from_verdict(verdict: ConflictVerdict, decision: Decision) -> list[Alert]:
+    if not verdict.has_conflict:
+        return []
+    return [
+        Alert(
+            ts=decision.ts,
+            kind="conflict",
+            title=verdict.title or "Potential Conflict",
+            detail=verdict.detail or "Knowledge base conflict detected.",
+            source=verdict.source_id or None,
+            decision_id=decision.id,
+        )
+    ]
+
+
+async def _generate_gemini_conflict(decision: Decision, hits: list[Chunk]) -> list[Alert]:
     client = genai.Client(api_key=settings.gemini_api_key)
     schema = {
         "type": "OBJECT",
@@ -86,40 +119,41 @@ async def _generate_live_conflict(decision: Decision, hits: list[Chunk]) -> list
         },
         "required": ["has_conflict", "title", "detail", "source_id"],
     }
-    prompt = (
-        "請檢查以下決策是否與知識庫衝突，只回傳 JSON。\n"
-        f"決策：{decision.model_dump_json()}\n"
-        f"來源：{json.dumps([hit.__dict__ for hit in hits], ensure_ascii=False)}"
-    )
     response = await client.aio.models.generate_content(
         model=settings.gemini_text_model,
-        contents=prompt,
+        contents=_conflict_prompt(decision, hits),
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=schema,
         ),
     )
     data: dict[str, Any] = json.loads(response.text or "{}")
-    if not data.get("has_conflict"):
+    return _alert_from_verdict(ConflictVerdict(**data), decision)
+
+
+async def _generate_openai_conflict(decision: Decision, hits: list[Chunk]) -> list[Alert]:
+    prompt = _conflict_prompt(decision, hits)
+    response = await AsyncOpenAI().responses.parse(
+        model=settings.openai_model,
+        instructions=prompt,
+        input=prompt,
+        text_format=ConflictVerdict,
+    )
+    verdict = response.output_parsed
+    if verdict is None:
         return []
-    return [
-        Alert(
-            ts=decision.ts,
-            kind="conflict",
-            title=data.get("title") or "Potential Conflict",
-            detail=data.get("detail") or "Knowledge base conflict detected.",
-            source=data.get("source_id") or None,
-            decision_id=decision.id,
-        )
-    ]
+    return _alert_from_verdict(verdict, decision)
 
 
 async def check_conflict(decision: Decision, hits: list[Chunk]) -> list[Alert]:
     alerts = _mock_conflicts(decision, hits)
-    if settings.mock_mode:
+    if settings.mock_mode or settings.live_provider == "mock":
         return alerts
     try:
-        live_alerts = await _generate_live_conflict(decision, hits)
+        if settings.live_provider == "openai" or not settings.gemini_api_key:
+            live_alerts = await _generate_openai_conflict(decision, hits)
+        else:
+            live_alerts = await _generate_gemini_conflict(decision, hits)
     except Exception:
         logger.exception("Live conflict check failed")
         return alerts

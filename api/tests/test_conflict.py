@@ -1,6 +1,8 @@
 import asyncio
+from types import SimpleNamespace
 
-from app.conflict import check_conflict
+from app.config import settings
+from app.conflict import ConflictVerdict, check_conflict
 from app.knowledge.store import store
 from app.models import Decision
 
@@ -32,3 +34,30 @@ def test_prototype_c_is_within_cost_limit() -> None:
     decision = Decision(ts=15, topic="Q4 主打原型", chosen="Prototype C")
 
     assert asyncio.run(check_conflict(decision, store.search("Q4 主打原型 Prototype C"))) == []
+
+
+def test_openai_conflict_false_preserves_rule_alert(monkeypatch) -> None:
+    class FakeResponses:
+        async def parse(self, **kwargs):
+            return SimpleNamespace(
+                output_parsed=ConflictVerdict(
+                    has_conflict=False,
+                    title="",
+                    detail="",
+                    source_id="",
+                )
+            )
+
+    class FakeClient:
+        responses = FakeResponses()
+
+    monkeypatch.setattr("app.conflict.AsyncOpenAI", lambda: FakeClient())
+    monkeypatch.setattr(settings, "mock_mode", False)
+    monkeypatch.setattr(settings, "live_provider", "openai")
+    monkeypatch.setattr(settings, "gemini_api_key", "")
+
+    decision = Decision(ts=15, topic="Q4 主打原型", chosen="Prototype B")
+    alerts = asyncio.run(check_conflict(decision, store.search("Q4 主打原型 Prototype B")))
+
+    assert len(alerts) == 1
+    assert "850" in alerts[0].detail
