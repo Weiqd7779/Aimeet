@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     mock_mode: bool = True
     synthesis_mock: bool = True
     live_provider: Literal["gemini", "openai", "mock"] = "mock"
+    data_dir: str = "data"
+    context_before_seconds: float = 20.0
+    context_after_seconds: float = 30.0
+    buffer_seconds: float = 60.0
 
     model_config = SettingsConfigDict(
         env_file=".env",

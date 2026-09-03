@@ -13,6 +13,9 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 
+# Session artifacts
+data/
+
 # Environment
 .env
 .env.*

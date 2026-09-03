@@ -47,8 +47,8 @@ class MockLiveEngine:
     async def send_audio(self, audio: bytes) -> None:
         del audio
 
-    async def send_frame(self, jpeg_bytes: bytes) -> None:
-        del jpeg_bytes
+    async def send_frame(self, jpeg_bytes: bytes, reason: str = "manual") -> None:
+        del jpeg_bytes, reason
 
     async def send_text(self, text: str) -> None:
         ts = time.monotonic() - self._started

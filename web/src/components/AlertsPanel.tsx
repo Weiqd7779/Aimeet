@@ -78,6 +78,37 @@ export function AlertsPanel({ meeting, dimmed = false }: { meeting: MeetingState
           ))}
         </div>
       </section>
+      <section className="panel">
+        <div className="mb-4 flex items-center gap-2">
+          <Target className="text-emerald-300" size={18} />
+          <div>
+            <p className="eyebrow">VERIFIED VISUAL EVENTS</p>
+            <h2 className="text-xl font-semibold text-white">Grounded Visual Events</h2>
+          </div>
+        </div>
+        <div className="space-y-3">
+          {meeting.visualEvents.length === 0 && <p className="empty-state">通過畫面驗證的事件會顯示在這裡</p>}
+          {meeting.visualEvents.map((event) => (
+            <article key={event.event_id} data-testid="grounded-visual-event" className="rounded-xl border border-emerald-300/15 bg-emerald-300/[0.04] p-3">
+              <div className="flex gap-3">
+                <div className="relative h-16 w-24 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-slate-900">
+                  {event.evidence_frame_ids[0] && meeting.sessionId ? <Image fill unoptimized src={`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")}/sessions/${meeting.sessionId}/frames/${event.evidence_frame_ids[0]}.jpg`} alt={event.trigger_text} className="object-cover" /> : <div className="flex h-full items-center justify-center text-[10px] text-slate-600">No frame</div>}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-white">{event.trigger_text}</p>
+                  <p className="mt-1 text-[10px] uppercase tracking-wide text-emerald-200">{event.lifecycle}</p>
+                  <p className="mt-1 text-[10px] text-slate-500">{event.speaker || "Speaker"} · {timestamp(event.time_range.trigger)}{event.time_range.end !== null ? ` – ${timestamp(event.time_range.end)}` : ""}</p>
+                </div>
+              </div>
+              {(event.context_before.length > 0 || event.context_after.length > 0) && (
+                <p className="mt-3 text-xs leading-5 text-slate-300">
+                  {[...event.context_before.slice(-2), ...event.context_after.slice(0, 2)].join(" / ")}
+                </p>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

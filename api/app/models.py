@@ -22,6 +22,26 @@ class GroundedEvent(BaseModel):
     confidence: float = 0.0
 
 
+class TimeRange(BaseModel):
+    start: float
+    trigger: float
+    end: float | None = None
+
+
+EventLifecycle = Literal["triggered", "aggregating", "closed"]
+
+
+class GroundedVisualEvent(BaseModel):
+    event_id: str = Field(default_factory=new_id)
+    time_range: TimeRange
+    trigger_text: str
+    speaker: str | None = None
+    context_before: list[str] = Field(default_factory=list)
+    context_after: list[str] = Field(default_factory=list)
+    evidence_frame_ids: list[str] = Field(default_factory=list)
+    lifecycle: EventLifecycle = "triggered"
+
+
 AlertKind = Literal["conflict", "slide_mismatch", "info"]
 AlertStatus = Literal["open", "acknowledged", "dismissed"]
 
@@ -81,6 +101,7 @@ class MeetingSession(BaseModel):
     transcript: list[TranscriptEntry] = Field(default_factory=list)
     frames: list[Frame] = Field(default_factory=list)
     grounded_events: list[GroundedEvent] = Field(default_factory=list)
+    grounded_visual_events: list[GroundedVisualEvent] = Field(default_factory=list)
     alerts: list[Alert] = Field(default_factory=list)
     decision_state: DecisionState = Field(default_factory=DecisionState)
     report: MeetingReport | None = None
@@ -91,6 +112,7 @@ class MeetingSession(BaseModel):
 EventType = Literal[
     "transcript",
     "grounded_event",
+    "grounded_visual_event",
     "alert",
     "decision",
     "frame_ack",

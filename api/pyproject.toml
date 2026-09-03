@@ -22,6 +22,7 @@ dependencies = [
 dev = [
     "ruff",
     "pytest",
+    "pytest-asyncio",
 ]
 
 [tool.ruff]
@@ -29,3 +30,6 @@ line-length = 100
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+asyncio_mode = "strict"
+addopts = "-m 'not integration'"
+markers = ["integration: hits real providers, requires OPENAI_API_KEY"]

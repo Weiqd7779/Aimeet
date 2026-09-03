@@ -110,9 +110,9 @@ class OpenAIRealtimeEngine:
         pcm24 = resample_pcm16(audio)
         await self._conn.input_audio_buffer.append(audio=base64.b64encode(pcm24).decode("ascii"))
 
-    async def send_frame(self, jpeg_bytes: bytes) -> None:
+    async def send_frame(self, jpeg_bytes: bytes, reason: str = "manual") -> None:
         now = time.monotonic()
-        if now - self._last_frame < 4:
+        if reason != "deictic" and now - self._last_frame < 4:
             return
         self._last_frame = now
         image_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg_bytes).decode('ascii')}"
