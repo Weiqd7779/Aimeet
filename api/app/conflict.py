@@ -92,16 +92,22 @@ def _conflict_prompt(decision: Decision, hits: list[Chunk]) -> str:
     )
 
 
-def _alert_from_verdict(verdict: ConflictVerdict, decision: Decision) -> list[Alert]:
+def _alert_from_verdict(
+    verdict: ConflictVerdict, decision: Decision, hits: list[Chunk]
+) -> list[Alert]:
     if not verdict.has_conflict:
         return []
+    source = next(
+        (hit.source for hit in hits if verdict.source_id in (hit.id, hit.source)),
+        verdict.source_id or None,
+    )
     return [
         Alert(
             ts=decision.ts,
             kind="conflict",
             title=verdict.title or "Potential Conflict",
             detail=verdict.detail or "Knowledge base conflict detected.",
-            source=verdict.source_id or None,
+            source=source,
             decision_id=decision.id,
         )
     ]
@@ -128,12 +134,12 @@ async def _generate_gemini_conflict(decision: Decision, hits: list[Chunk]) -> li
         ),
     )
     data: dict[str, Any] = json.loads(response.text or "{}")
-    return _alert_from_verdict(ConflictVerdict(**data), decision)
+    return _alert_from_verdict(ConflictVerdict(**data), decision, hits)
 
 
 async def _generate_openai_conflict(decision: Decision, hits: list[Chunk]) -> list[Alert]:
     prompt = _conflict_prompt(decision, hits)
-    response = await AsyncOpenAI().responses.parse(
+    response = await AsyncOpenAI(api_key=settings.openai_api_key).responses.parse(
         model=settings.openai_model,
         instructions=prompt,
         input=prompt,
@@ -142,7 +148,7 @@ async def _generate_openai_conflict(decision: Decision, hits: list[Chunk]) -> li
     verdict = response.output_parsed
     if verdict is None:
         return []
-    return _alert_from_verdict(verdict, decision)
+    return _alert_from_verdict(verdict, decision, hits)
 
 
 async def check_conflict(decision: Decision, hits: list[Chunk]) -> list[Alert]:
@@ -158,10 +164,7 @@ async def check_conflict(decision: Decision, hits: list[Chunk]) -> list[Alert]:
         logger.exception("Live conflict check failed")
         return alerts
     for live_alert in live_alerts:
-        if any(
-            alert.source == live_alert.source and alert.detail == live_alert.detail
-            for alert in alerts
-        ):
+        if any(alert.source == live_alert.source for alert in alerts):
             continue
         alerts.append(live_alert)
     return alerts
