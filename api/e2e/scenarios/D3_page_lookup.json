@@ -4,12 +4,12 @@
   "synthesize": true,
   "steps": [
     { "at": 0.0, "frame": "chart" },
-    { "at": 1.0, "speaker": "me", "say": "先看成本。B 是一千零二十，超過八百五十的上限。" },
-    { "at": 7.5, "speaker": "remote", "say": "C 八百三十在上限內，滿意度中等。" },
-    { "at": 12.5, "speaker": "me", "say": "好，接下來看時程。" },
-    { "at": 14.5, "frame": "timeline" },
-    { "at": 16.0, "speaker": "remote", "say": "供應商兩週內交樣品，測試計畫下週三前由小林發出。" },
-    { "at": 22.5, "speaker": "me", "say": "那就這樣，握感的 issue 開高優先。" }
+    { "at": 1.0, "speaker": "me", "say": "先看成本。Prototype B 的成本是一千零二十元，超過八百五十的上限。" },
+    { "at": 7.5, "speaker": "remote", "say": "Prototype C 的成本是八百三十元，在上限內，滿意度中等。" },
+    { "at": 14.0, "speaker": "me", "say": "好，接下來看時程。" },
+    { "at": 16.0, "frame": "timeline" },
+    { "at": 17.5, "speaker": "remote", "say": "供應商兩週內交樣品，測試計畫下週三前由小林發出。" },
+    { "at": 24.0, "speaker": "me", "say": "那就這樣，握感的 issue 開高優先。" }
   ],
   "settle_seconds": 12,
   "expect": {

@@ -13,6 +13,7 @@ from starlette.websockets import WebSocketDisconnect
 from app.config import settings
 from app.conflict import check_conflict
 from app.knowledge.store import KnowledgeStore
+from app.live.deictic import DEICTIC
 from app.live.events import (
     EchoDropped,
     EngineStatus,
@@ -37,16 +38,6 @@ from app.record.store import Recorder
 
 logger = logging.getLogger(__name__)
 
-DEICTIC = re.compile(
-    # pointing words
-    r"這個|那個|這裡|那裡|這邊|那邊|右邊|左邊|上面|下面|這塊|那塊|這張|那張|這頁|那頁|這行|那行"
-    # talking about what is on screen
-    r"|螢幕|畫面|這頁|上一頁|下一頁|投影片|簡報|圖表|表格|這張圖|這個圖|柱狀圖|折線圖|截圖"
-    # English: only when the pointer is attached to a screen noun, so "this is fine" never fires
-    r"|\b(?:this|that|the)\s+(?:one|chart|table|slide|page|graph|diagram|row|column|number|screen)\b"
-    r"|\bon\s+(?:the\s+)?screen\b|\b(?:over|right)\s+here\b",
-    re.IGNORECASE,
-)
 # Someone actually committing to something. Evaluating ("先看成本") is not a decision.
 COMMIT = re.compile(
     r"決定|採用|就用|就選|就走|定案|拍板|就這樣|敲定|確定|同意|改成|改用|改採|那就|先用|先採"
@@ -55,7 +46,18 @@ COMMIT = re.compile(
 )
 # "候選" is deliberately absent: "採用 C，B 留做候選" is a decision *with* a runner-up.
 UNDECIDED = re.compile(r"尚未|未定|待定|評估中|考慮中|還沒決定|TBD", re.IGNORECASE)
+ANCHOR_MIN_CONFIDENCE = 0.6  # vision step must be sure it saw the named thing
+ANCHOR_MERGE_SECONDS = 15.0  # same speaker, same object/frame within this = one anchor
+FRAGMENT_TAIL = re.compile(r"(這個|那個|這|那|是|的|就是|然後|以及|還有)[，,。．.…\s]*$")
 SAME_MEANING = 85  # rapidfuzz score above which two reasons/constraints are one
+
+
+def _is_fragment(text: str) -> bool:
+    """「以及這個是…」 - the object has not been said yet; wait for the next sentence."""
+    stripped = re.sub(r"[，,。．.…!！?？\s]+$", "", text)
+    return len(stripped) <= 8 and bool(FRAGMENT_TAIL.search(stripped))
+
+
 MAX_LIST_ITEMS = 6  # reasons/constraints kept per decision list (newest win)
 # standalone numbers (850, 1,020) and option letters (A/B/C); "Q4" is neither
 DISTINGUISHING = re.compile(r"(?<![A-Za-z])\d[\d,.]*|(?<![A-Za-z0-9])[A-Z](?![A-Za-z0-9])")
@@ -186,7 +188,7 @@ class LiveSessionManager:
                 self.session.frames.append(frame)
                 del self.session.frames[:-200]
                 scene = self.recorder.add_frame(frame, jpeg_bytes)
-                await self.engine.send_frame(jpeg_bytes)
+                await self.engine.send_frame(jpeg_bytes, frame_id=frame.id, ts=frame.ts)
                 await self._emit(
                     "frame_ack", {**frame.model_dump(exclude={"jpeg_b64"}), "scene_seq": scene.seq}
                 )
@@ -250,29 +252,50 @@ class LiveSessionManager:
     async def _handle_tool_call(self, event: ToolCall) -> None:
         if event.name == "create_anchor":
             source = self._utterance(event.utterance_id)
-            # Grounding is only meaningful when someone actually pointed at something
-            # ("這個/右邊/螢幕上…") and there is a frame to point at. The model's own
-            # confidence is not a usable signal here (it reports >0.85 for merely naming a
-            # thing that is also on screen), so the pointing word is a hard requirement;
-            # everything else is still attached to the page via scenes.
-            needs_frame = not isinstance(self.engine, MockLiveEngine)
-            if (needs_frame and not self.session.frames) or not source:
+            real_engine = not isinstance(self.engine, MockLiveEngine)
+            if (real_engine and not self.session.frames) or not source:
                 return
-            if not DEICTIC.search(source.text):
+            # Hard gates (the model's judgement alone over-anchors):
+            #  - the utterance must contain a pointing / screen word,
+            #  - it must be a whole sentence, not a dangling 「以及這個是…」,
+            #  - the vision step must be sure it saw the named thing.
+            confidence = float(event.args.get("confidence", 0.0))
+            if real_engine and (
+                not DEICTIC.search(source.text)
+                or _is_fragment(source.text)
+                or confidence < ANCHOR_MIN_CONFIDENCE
+            ):
+                self.recorder.note(
+                    "anchor_skipped",
+                    {"utterance_id": source.id, "confidence": confidence, "args": event.args},
+                )
                 return
             target = str(event.args.get("target", ""))
-            grounded = GroundedEvent(
-                ts=event.ts or self._elapsed(),
-                speaker=event.args.get("speaker") or source.speaker,
-                utterance=source.text,
-                target=target,
-                observation=str(event.args.get("observation", "")),
-                frame_id=self.session.frames[-1].id if self.session.frames else None,
-                confidence=float(event.args.get("confidence", 0.0)),
+            # The vision step tells us which frame it actually looked at (aligned to the
+            # speech span); fall back to the latest frame only for the mock engine.
+            frame_id = event.args.get("frame_id") or (
+                self.session.frames[-1].id if self.session.frames else None
             )
-            self.session.grounded_events.append(grounded)
+            grounded = self._merge_anchor(
+                GroundedEvent(
+                    ts=event.ts or self._elapsed(),
+                    speaker=event.args.get("speaker") or source.speaker,
+                    utterance=source.text,
+                    target=target,
+                    observation=str(event.args.get("observation", "")),
+                    frame_id=frame_id,
+                    confidence=confidence,
+                )
+            )
             self.recorder.link(event.utterance_id, event.name, grounded.id)
             await self._emit("grounded_event", grounded.model_dump())
+        elif event.name == "not_visible":
+            # Speaker pointed at something the frames do not show. Kept on record (the
+            # report can mention it) but never shown as an anchor.
+            self.recorder.note(
+                "anchor_not_visible",
+                {"utterance_id": event.utterance_id, "object": event.args.get("object")},
+            )
         elif event.name == "propose_decision":
             source = self._utterance(event.utterance_id)
             chosen = str(event.args.get("chosen", ""))
@@ -334,10 +357,33 @@ class LiveSessionManager:
                 },
             )
 
+    def _merge_anchor(self, fresh: GroundedEvent) -> GroundedEvent:
+        """The same object described across consecutive sentences is one anchor: update
+        the existing one (target/observation/frame may get better) instead of stacking."""
+        for existing in reversed(self.session.grounded_events):
+            if fresh.ts - existing.ts > ANCHOR_MERGE_SECONDS:
+                break
+            same_frame = existing.frame_id == fresh.frame_id
+            same_target = fuzz.partial_ratio(existing.target, fresh.target) >= 70
+            if existing.speaker == fresh.speaker and (same_frame or same_target):
+                existing.ts = fresh.ts
+                existing.utterance = fresh.utterance
+                existing.target = fresh.target
+                existing.observation = fresh.observation
+                existing.frame_id = fresh.frame_id
+                existing.confidence = max(existing.confidence, fresh.confidence)
+                return existing
+        self.session.grounded_events.append(fresh)
+        return fresh
+
     def _decision_context(self) -> str:
         lines = [
             f"- decision[{d.status}] topic={d.topic!r} chosen={d.chosen!r}"
             for d in self.session.decision_state.decisions
+        ]
+        lines += [
+            f"- anchor@{g.ts:.0f}s {g.speaker}: {g.target}"
+            for g in self.session.grounded_events[-3:]
         ]
         lines += [
             f"- alert[{a.kind}/{a.status}] {a.detail}"

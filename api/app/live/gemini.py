@@ -112,7 +112,10 @@ class GeminiLiveEngine:
             audio=types.Blob(data=audio, mime_type="audio/pcm;rate=16000")
         )
 
-    async def send_frame(self, jpeg_bytes: bytes) -> None:
+    async def send_frame(
+        self, jpeg_bytes: bytes, frame_id: str | None = None, ts: float | None = None
+    ) -> None:
+        del frame_id, ts
         await self._session.send_realtime_input(
             video=types.Blob(data=jpeg_bytes, mime_type="image/jpeg")
         )

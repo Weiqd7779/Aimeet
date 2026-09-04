@@ -10,9 +10,10 @@ def _new_id() -> str:
 @dataclass
 class Transcript:
     text: str
-    ts: float
+    ts: float  # speech start (session seconds)
     speaker: str | None = None
     id: str = field(default_factory=_new_id)
+    ended: float | None = None  # when the transcript completed (upper bound of the speech span)
 
 
 @dataclass

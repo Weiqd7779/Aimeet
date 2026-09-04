@@ -72,7 +72,7 @@ function reducer(state: State, action: Action): State {
     return { ...state, transcript: [...state.transcript, event.payload as TranscriptEntry] };
   }
   if (event.type === "grounded_event") {
-    return { ...state, groundedEvents: [...state.groundedEvents, event.payload as GroundedEvent] };
+    return { ...state, groundedEvents: replaceById(state.groundedEvents, event.payload as GroundedEvent) };
   }
   if (event.type === "alert") {
     return { ...state, alerts: replaceById(state.alerts, event.payload as Alert) };
