@@ -17,6 +17,7 @@ dependencies = [
     "rapidfuzz",
     "numpy",
     "pillow>=12.3.0",
+    "opencc-python-reimplemented>=0.1.7",
 ]
 
 [dependency-groups]

@@ -38,7 +38,9 @@ class Reasoner:
         data = base64.b64encode(jpeg_bytes).decode("ascii")
         self._frame = (ts, f"data:image/jpeg;base64,{data}")
 
-    def _build_input(self, speaker: str, text: str, ts: float) -> list[dict[str, Any]]:
+    def _build_input(
+        self, speaker: str, text: str, ts: float, detail: str = "low"
+    ) -> list[dict[str, Any]]:
         history = "\n".join(f"[{s}] {t}" for s, t in self._history) or "（無）"
         state = self.context_provider() if self.context_provider else ""
         content: list[dict[str, Any]] = [
@@ -53,13 +55,16 @@ class Reasoner:
             }
         ]
         if self._frame and ts - self._frame[0] <= FRAME_MAX_AGE_S:
-            content.append({"type": "input_image", "image_url": self._frame[1], "detail": "low"})
+            content.append({"type": "input_image", "image_url": self._frame[1], "detail": detail})
         return [{"role": "user", "content": content}]
 
-    async def process(self, speaker: str, text: str, ts: float) -> list[ToolCall]:
-        """Return the tool calls the model wants for this utterance (possibly none)."""
+    async def process(
+        self, speaker: str, text: str, ts: float, *, look_closely: bool = False
+    ) -> list[ToolCall]:
+        """Return the tool calls the model wants for this utterance (possibly none).
+        `look_closely` sends the frame at high detail (used when the speaker points at it)."""
         async with self._lock:
-            payload = self._build_input(speaker, text, ts)
+            payload = self._build_input(speaker, text, ts, "high" if look_closely else "low")
             self._history.append((speaker, text))
             try:
                 response = await self._client.responses.create(

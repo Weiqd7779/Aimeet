@@ -46,4 +46,14 @@ class EchoDropped:
     ts: float
 
 
-EngineEvent = Transcript | ToolCall | IntentResolved | EngineStatus | EchoDropped
+@dataclass
+class Rejected:
+    """A transcript discarded as an STT hallucination (no speech energy / prompt echo)."""
+
+    text: str
+    ts: float
+    speaker: str | None
+    reason: str
+
+
+EngineEvent = Transcript | ToolCall | IntentResolved | EngineStatus | EchoDropped | Rejected

@@ -5,6 +5,13 @@ def test_exact_and_punctuation_variants_are_echo() -> None:
     assert similar("供應商說兩週內可以交樣品。", "供應商說，兩週內可以交樣品")
 
 
+def test_simplified_vs_traditional_output_is_still_echo() -> None:
+    assert similar(
+        "這張圖表顯示，Prototype B的滿意度最高，測試者都給正面回饋。",
+        "这张图表显示,Prototype B的满意度最高,测试者都给正面反馈。",
+    )
+
+
 def test_mic_fragment_of_remote_sentence_is_echo() -> None:
     assert similar("兩週內可以交樣品", "供應商說兩週內可以交樣品，成本大概每台八百五十塊。")
 
