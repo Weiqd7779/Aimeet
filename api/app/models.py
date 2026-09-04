@@ -90,9 +90,31 @@ class DecisionState(BaseModel):
 
 
 class TranscriptEntry(BaseModel):
+    id: str = Field(default_factory=new_id)
     ts: float
     speaker: str | None = None
     text: str
+
+
+IntentStatus = Literal["pending", "none", "tools"]
+
+
+class UtteranceRecord(BaseModel):
+    """One utterance after intent resolution. Fixed schema for downstream search / RAG."""
+
+    id: str
+    session_id: str
+    seq: int
+    ts: float
+    wall_time: datetime
+    speaker: str | None
+    text: str
+    intent: IntentStatus = "pending"
+    tools: list[str] = Field(default_factory=list)
+    grounded_event_ids: list[str] = Field(default_factory=list)
+    decision_ids: list[str] = Field(default_factory=list)
+    alert_ids: list[str] = Field(default_factory=list)
+    frame_id: str | None = None
 
 
 class MeetingSession(BaseModel):
@@ -116,6 +138,7 @@ EventType = Literal[
     "alert",
     "decision",
     "frame_ack",
+    "utterance_resolved",
     "status",
     "error",
 ]

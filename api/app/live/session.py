@@ -7,12 +7,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import WebSocket
+from rapidfuzz import fuzz
 from starlette.websockets import WebSocketDisconnect
 
 from app.config import settings
 from app.conflict import check_conflict
 from app.knowledge.store import KnowledgeStore
-from app.live.events import EngineStatus, ToolCall, Transcript
+from app.live.events import EngineStatus, IntentResolved, ToolCall, Transcript
 from app.live.gemini import GeminiLiveEngine
 from app.live.mock import MockLiveEngine
 from app.live.openai_rt import OpenAIRealtimeEngine
@@ -27,6 +28,7 @@ from app.models import (
     TimeRange,
     TranscriptEntry,
 )
+from app.record.store import Recorder
 from app.storage import save_events, save_frame
 from app.vision import verify_visual_reference
 
@@ -37,6 +39,7 @@ logger = logging.getLogger(__name__)
 class VerifyJob:
     event: GroundedVisualEvent
     anchor: GroundedEvent
+    utterance_id: str | None = None
 
 
 @dataclass
@@ -47,6 +50,7 @@ class CloseJob:
 @dataclass
 class ConflictJob:
     decision: Decision
+    utterance_id: str | None = None
 
 
 ProcessingJob = VerifyJob | CloseJob | ConflictJob
@@ -68,6 +72,7 @@ class LiveSessionManager:
             self.engine = GeminiLiveEngine()
         else:
             self.engine = MockLiveEngine()
+        self.recorder = Recorder(session, settings.record_dir)
         self._started = asyncio.get_running_loop().time()
         self.queue: asyncio.Queue[ProcessingJob] = asyncio.Queue()
         self.context_before_seconds = settings.context_before_seconds
@@ -126,6 +131,7 @@ class LiveSessionManager:
                     with contextlib.suppress(asyncio.CancelledError):
                         await task
             await self.engine.close()
+            self.recorder.close()
             with contextlib.suppress(RuntimeError, WebSocketDisconnect):
                 await self.websocket.close()
 
@@ -133,7 +139,10 @@ class LiveSessionManager:
         message_type = message.get("type")
         try:
             if message_type == "audio":
-                await self.engine.send_audio(base64.b64decode(message["pcm16_b64"], validate=True))
+                await self.engine.send_audio(
+                    base64.b64decode(message["pcm16_b64"], validate=True),
+                    source=message.get("source"),
+                )
             elif message_type == "frame":
                 jpeg_bytes = base64.b64decode(message["jpeg_b64"], validate=True)
                 frame = Frame(
@@ -164,12 +173,22 @@ class LiveSessionManager:
 
     async def _handle_engine_event(self, event: Any) -> bool:
         if isinstance(event, Transcript):
-            transcript = TranscriptEntry(ts=event.ts, speaker=event.speaker, text=event.text)
+            transcript = TranscriptEntry(
+                id=event.id, ts=event.ts, speaker=event.speaker, text=event.text
+            )
             self.session.transcript.append(transcript)
             self._trim_buffers()
+            self.recorder.add_utterance(
+                id=transcript.id, ts=transcript.ts, speaker=transcript.speaker, text=transcript.text
+            )
             await self._emit("transcript", transcript.model_dump())
         elif isinstance(event, ToolCall):
             await self._handle_tool_call(event)
+        elif isinstance(event, IntentResolved):
+            self.recorder.resolve(event.utterance_id, event.tools)
+            await self._emit(
+                "utterance_resolved", {"utterance_id": event.utterance_id, "tools": event.tools}
+            )
         elif isinstance(event, EngineStatus):
             await self._emit("status", {"status": event.status, "detail": event.detail})
             return event.status in {"script_complete", "disconnected"}
@@ -219,9 +238,9 @@ class LiveSessionManager:
                 "status",
                 {"status": "request_frame", "request_frame": True, "reason": "deictic"},
             )
-            self.queue.put_nowait(VerifyJob(visual_event, grounded))
+            self.queue.put_nowait(VerifyJob(visual_event, grounded, event.utterance_id))
         elif event.name == "propose_decision":
-            decision = Decision(
+            proposal = Decision(
                 ts=event.ts or self._elapsed(),
                 topic=str(event.args.get("topic", "")),
                 chosen=str(event.args.get("chosen", "")),
@@ -230,7 +249,7 @@ class LiveSessionManager:
                 reasons_against=list(event.args.get("reasons_against", [])),
                 constraints=list(event.args.get("constraints", [])),
             )
-            self.session.decision_state.decisions.append(decision)
+            decision = self._merge_decision(proposal)
             options = self.session.decision_state.options_under_comparison
             for option in [decision.chosen, *decision.alternatives]:
                 if option not in options:
@@ -238,8 +257,9 @@ class LiveSessionManager:
             for constraint in decision.constraints:
                 if constraint not in self.session.decision_state.constraints:
                     self.session.decision_state.constraints.append(constraint)
+            self.recorder.link(event.utterance_id, event.name, decision.id)
             await self._emit("decision", decision.model_dump())
-            self.queue.put_nowait(ConflictJob(decision))
+            self.queue.put_nowait(ConflictJob(decision, event.utterance_id))
         elif event.name == "notify_speaker":
             kind = event.args.get("kind", "info")
             if kind not in {"conflict", "slide_mismatch", "info"}:
@@ -251,8 +271,10 @@ class LiveSessionManager:
                 detail=str(event.args.get("message", "")),
             )
             self.session.alerts.append(alert)
+            self.recorder.link(event.utterance_id, event.name, alert.id)
             await self._emit("alert", alert.model_dump())
         elif event.name == "capture_context":
+            self.recorder.link(event.utterance_id, event.name, "")
             await self._emit(
                 "status",
                 {
@@ -276,11 +298,11 @@ class LiveSessionManager:
 
     async def _process_job(self, job: ProcessingJob) -> None:
         if isinstance(job, VerifyJob):
-            await self._verify_event(job.event, job.anchor)
+            await self._verify_event(job.event, job.anchor, job.utterance_id)
         elif isinstance(job, CloseJob):
             await self._close_event(job.event)
         elif isinstance(job, ConflictJob):
-            await self._run_conflict_check(job.decision)
+            await self._run_conflict_check(job.decision, job.utterance_id)
 
     async def _wait_for_frame(self, trigger: float) -> Frame | None:
         deadline = self._elapsed() + self.frame_wait_seconds
@@ -290,7 +312,12 @@ class LiveSessionManager:
             await asyncio.sleep(0.05)
         return self._nearest_frame(trigger)
 
-    async def _verify_event(self, event: GroundedVisualEvent, anchor: GroundedEvent) -> None:
+    async def _verify_event(
+        self,
+        event: GroundedVisualEvent,
+        anchor: GroundedEvent,
+        utterance_id: str | None = None,
+    ) -> None:
         frame = await self._wait_for_frame(event.time_range.trigger)
         context = [*event.context_before, event.trigger_text]
         verdict = await verify_visual_reference(
@@ -306,6 +333,8 @@ class LiveSessionManager:
             anchor.frame_id = frame.id
             save_frame(self.session.id, frame.id, frame.jpeg_b64)
         self.session.grounded_events.append(anchor)
+        if utterance_id:
+            self.recorder.link(utterance_id, "create_anchor", anchor.id)
         await self._try_emit("grounded_event", anchor.model_dump())
         event.lifecycle = "aggregating"
         self.session.grounded_visual_events.append(event)
@@ -330,16 +359,41 @@ class LiveSessionManager:
         save_events(self.session.id, self.session.grounded_visual_events)
         await self._try_emit("grounded_visual_event", event.model_dump())
 
-    async def _run_conflict_check(self, decision: Decision) -> None:
+    async def _run_conflict_check(
+        self, decision: Decision, utterance_id: str | None = None
+    ) -> None:
         hits = self.knowledge.search(f"{decision.topic} {decision.chosen}")
         alerts = await check_conflict(decision, hits)
         if not alerts:
             return
         decision.conflicts.extend(alert.id for alert in alerts)
         self.session.alerts.extend(alerts)
+        if utterance_id:
+            for alert in alerts:
+                self.recorder.link(utterance_id, "notify_speaker", alert.id)
         await self._try_emit("decision", decision.model_dump())
         for alert in alerts:
             await self._try_emit("alert", alert.model_dump())
+
+    def _merge_decision(self, proposal: Decision) -> Decision:
+        """Fold a proposal into an existing candidate on the same topic instead of
+        stacking near-duplicates; the latest wording wins, lists are unioned."""
+        for existing in self.session.decision_state.decisions:
+            if existing.status != "candidate":
+                continue
+            same_topic = fuzz.token_set_ratio(existing.topic, proposal.topic) >= 70
+            same_choice = fuzz.partial_ratio(existing.chosen, proposal.chosen) >= 70
+            if same_topic or same_choice:
+                existing.chosen = proposal.chosen
+                existing.ts = proposal.ts
+                for field in ("alternatives", "reasons_for", "reasons_against", "constraints"):
+                    merged = getattr(existing, field)
+                    merged.extend(item for item in getattr(proposal, field) if item not in merged)
+                if existing.chosen in existing.alternatives:
+                    existing.alternatives.remove(existing.chosen)
+                return existing
+        self.session.decision_state.decisions.append(proposal)
+        return proposal
 
     def _update_decision(self, decision_id: str, status: str) -> Decision:
         if status not in {"candidate", "confirmed", "rejected"}:

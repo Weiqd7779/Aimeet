@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import model_validator
+from pydantic import BeforeValidator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,16 +10,20 @@ class Settings(BaseSettings):
     gemini_live_model: str = "gemini-3.1-flash-live-preview"
     gemini_text_model: str = "gemini-2.5-flash"
     openai_model: str = "gpt-5.6-luna"
-    openai_model_complex: str = "gpt-5.6-terra"
+    openai_model_complex: str = "gpt-5.6-luna"
     openai_realtime_model: str = "gpt-realtime-2.1"
     openai_transcribe_model: str = "gpt-4o-mini-transcribe"
     mock_mode: bool = True
     synthesis_mock: bool = True
-    live_provider: Literal["gemini", "openai", "mock"] = "mock"
+    live_provider: Annotated[
+        Literal["gemini", "openai", "mock"],
+        BeforeValidator(lambda value: value or "mock"),
+    ] = "mock"
     data_dir: str = "data"
     context_before_seconds: float = 20.0
     context_after_seconds: float = 30.0
     buffer_seconds: float = 60.0
+    record_dir: str = "data/sessions"
 
     model_config = SettingsConfigDict(
         env_file=".env",

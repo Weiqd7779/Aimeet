@@ -1,3 +1,10 @@
+export type AudioSource = "me" | "remote";
+
+export interface AudioChunk {
+  pcm16_b64: string;
+  source: AudioSource;
+}
+
 function bytesToBase64(bytes: Int16Array) {
   const view = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let binary = "";
@@ -5,64 +12,62 @@ function bytesToBase64(bytes: Int16Array) {
   return btoa(binary);
 }
 
-function floatToPcm16(input: Float32Array) {
-  const output = new Int16Array(input.length);
-  for (let index = 0; index < input.length; index += 1) {
-    const sample = Math.max(-1, Math.min(1, input[index]));
-    output[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-  }
-  return output;
-}
-
 const workletSource = `
-class Pcm16Processor extends AudioWorkletProcessor {
-  constructor() { super(); this.buffer = []; this.size = 1600; }
+const CHUNK = 1600;
+const SOURCES = ["me", "remote"];
+
+class SplitProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buffers = [[], []];
+  }
   process(inputs) {
-    const channel = inputs[0] && inputs[0][0];
-    if (!channel) return true;
-    for (const sample of channel) this.buffer.push(sample);
-    while (this.buffer.length >= this.size) {
-      const chunk = this.buffer.splice(0, this.size);
-      const pcm = new Int16Array(chunk.length);
-      for (let i = 0; i < chunk.length; i++) {
-        const sample = Math.max(-1, Math.min(1, chunk[i]));
-        pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+    for (let input = 0; input < SOURCES.length; input++) {
+      const channel = inputs[input] && inputs[input][0];
+      if (!channel || !channel.length) continue;
+      const buffer = this.buffers[input];
+      for (const sample of channel) buffer.push(sample);
+      while (buffer.length >= CHUNK) {
+        const chunk = buffer.splice(0, CHUNK);
+        const pcm = new Int16Array(CHUNK);
+        for (let i = 0; i < CHUNK; i++) {
+          const sample = Math.max(-1, Math.min(1, chunk[i]));
+          pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+        }
+        this.port.postMessage({ pcm, source: SOURCES[input] }, [pcm.buffer]);
       }
-      this.port.postMessage(pcm, [pcm.buffer]);
     }
     return true;
   }
 }
-registerProcessor("aimeet-pcm16", Pcm16Processor);
+registerProcessor("aimeet-split", SplitProcessor);
 `;
 
 export async function createAudioPipeline(
-  stream: MediaStream,
-  send: (pcm16_b64: string) => void,
+  streams: { mic: MediaStream | null; tab: MediaStream | null },
+  send: (chunk: AudioChunk) => void,
 ) {
   const context = new AudioContext({ sampleRate: 16000 });
-  const source = context.createMediaStreamSource(stream);
-  let processor: AudioWorkletNode | ScriptProcessorNode;
-  let moduleUrl: string | undefined;
-  try {
-    moduleUrl = URL.createObjectURL(new Blob([workletSource], { type: "application/javascript" }));
-    await context.audioWorklet.addModule(moduleUrl);
-    const node = new AudioWorkletNode(context, "aimeet-pcm16");
-    node.port.onmessage = (event: MessageEvent<Int16Array>) => send(bytesToBase64(event.data));
-    processor = node;
-  } catch {
-    const node = context.createScriptProcessor(4096, 1, 1);
-    node.onaudioprocess = (event) => {
-      send(bytesToBase64(floatToPcm16(event.inputBuffer.getChannelData(0))));
-    };
-    processor = node;
-  }
-  source.connect(processor);
-  processor.connect(context.destination);
+  const moduleUrl = URL.createObjectURL(new Blob([workletSource], { type: "application/javascript" }));
+  await context.audioWorklet.addModule(moduleUrl);
+  const node = new AudioWorkletNode(context, "aimeet-split", { numberOfInputs: 2, numberOfOutputs: 0 });
+  node.port.onmessage = (event: MessageEvent<{ pcm: Int16Array; source: AudioSource }>) =>
+    send({ pcm16_b64: bytesToBase64(event.data.pcm), source: event.data.source });
+
+  const sources: MediaStreamAudioSourceNode[] = [];
+  const attach = (stream: MediaStream | null, input: number) => {
+    if (!stream?.getAudioTracks().length) return;
+    const source = context.createMediaStreamSource(stream);
+    source.connect(node, 0, input);
+    sources.push(source);
+  };
+  attach(streams.mic, 0);
+  attach(streams.tab, 1);
+
   return () => {
-    source.disconnect();
-    processor.disconnect();
-    if (moduleUrl) URL.revokeObjectURL(moduleUrl);
+    sources.forEach((source) => source.disconnect());
+    node.disconnect();
+    URL.revokeObjectURL(moduleUrl);
     void context.close();
   };
 }

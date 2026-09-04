@@ -32,15 +32,15 @@ class FakeWebSocket:
 class FakeEngine:
     def __init__(self) -> None:
         self.events: asyncio.Queue[EngineEvent] = asyncio.Queue()
-        self.audio: list[bytes] = []
+        self.audio: list[tuple[bytes, str | None]] = []
         self.frames: list[tuple[bytes, str]] = []
         self.texts: list[str] = []
 
     async def start(self, session_id: str) -> None:
         del session_id
 
-    async def send_audio(self, audio: bytes) -> None:
-        self.audio.append(audio)
+    async def send_audio(self, audio: bytes, source: str | None = None) -> None:
+        self.audio.append((audio, source))
 
     async def send_frame(self, jpeg_bytes: bytes, reason: str = "manual") -> None:
         self.frames.append((jpeg_bytes, reason))

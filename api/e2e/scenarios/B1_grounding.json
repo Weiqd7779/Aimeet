@@ -1,0 +1,15 @@
+{
+  "id": "B1",
+  "title": "有畫面時說「右邊這塊圖表」：產生帶截圖與正確 speaker 的 grounded event",
+  "steps": [
+    { "at": 0.0, "frame": "chart" },
+    { "at": 1.5, "speaker": "remote", "say": "右邊這塊圖表先不要動，等資料補齊再說。" }
+  ],
+  "settle_seconds": 10,
+  "expect": {
+    "grounded_min": 1,
+    "grounded_speaker": "與會者",
+    "grounded_has_frame": true,
+    "judge": "grounded event 的 target 必須指向畫面右側的長條圖 / 滿意度圖表（而不是左側的成本表格），speaker 為與會者。"
+  }
+}

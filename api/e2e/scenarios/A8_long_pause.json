@@ -1,0 +1,20 @@
+{
+  "id": "A8",
+  "title": "句子中間停頓 1 秒（思考）：可以切行，但同一人、資訊完整",
+  "steps": [
+    {
+      "at": 0.0,
+      "speaker": "remote",
+      "say": ["成本的部分我想一下，大概是", "每台多五十塊左右。"],
+      "pause": 1.0
+    }
+  ],
+  "settle_seconds": 8,
+  "expect": {
+    "speakers_only": ["與會者"],
+    "min_transcripts_per_speaker": { "與會者": 1 },
+    "max_transcripts_per_speaker": { "與會者": 3 },
+    "record_integrity": true,
+    "judge": "把「與會者」的所有逐字稿接起來後，必須完整包含「成本」與「五十塊」兩個資訊；切成幾行不影響判定。"
+  }
+}

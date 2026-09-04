@@ -1,0 +1,12 @@
+{
+  "id": "B3",
+  "title": "沒有畫面卻說「這個」：不得亂猜 grounded event",
+  "steps": [
+    { "at": 0.0, "speaker": "me", "say": "這個先放著，等一下再看。" }
+  ],
+  "settle_seconds": 7,
+  "expect": {
+    "grounded_max": 0,
+    "max_decisions": 0
+  }
+}

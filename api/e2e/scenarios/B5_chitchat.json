@@ -1,0 +1,15 @@
+{
+  "id": "B5",
+  "title": "閒聊：不得誤報決策或提醒",
+  "steps": [
+    { "at": 0.0, "speaker": "me", "say": "大家早，今天外面好熱，你們那邊有下雨嗎？" },
+    { "at": 5.0, "speaker": "remote", "say": "沒有，不過空氣很悶，等一下想去買咖啡。" },
+    { "at": 10.0, "speaker": "me", "say": "好，那我們等人到齊再開始。" }
+  ],
+  "settle_seconds": 8,
+  "expect": {
+    "max_decisions": 0,
+    "max_alerts": 0,
+    "grounded_max": 0
+  }
+}

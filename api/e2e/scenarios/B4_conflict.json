@@ -1,0 +1,14 @@
+{
+  "id": "B4",
+  "title": "決策與知識庫衝突（Prototype B 成本超過上限）：出現 conflict 提醒",
+  "steps": [
+    { "at": 0.0, "speaker": "remote", "say": "測試者對 Prototype B 的握感評價最好。" },
+    { "at": 5.0, "speaker": "me", "say": "那我們決定 Q4 改採用 Prototype B。" }
+  ],
+  "settle_seconds": 14,
+  "expect": {
+    "decision_chosen_contains_any": ["Prototype B", "prototype B", "B"],
+    "alert_kinds_include": ["conflict"],
+    "judge": "必須有 conflict alert，內容應提到 Prototype B 的成本 NT$1,020 超過上限 NT$850，或提到與過去 Q4 決議 Prototype A 不一致。"
+  }
+}

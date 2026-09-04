@@ -23,6 +23,8 @@ dev = [
     "ruff",
     "pytest",
     "pytest-asyncio",
+    "pillow>=12.3.0",
+    "opencc-python-reimplemented>=0.1.7",
 ]
 
 [tool.ruff]

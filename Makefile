@@ -1,4 +1,4 @@
-.PHONY: setup dev dev-web dev-api lint test
+.PHONY: setup dev dev-web dev-api e2e lint test
 
 setup:
 	./setup.sh
@@ -10,7 +10,10 @@ dev-web:
 	cd web && npm run dev
 
 dev-api:
-	cd api && uv run uvicorn app.main:app --reload
+	cd api && uv run uvicorn app.main:app --reload --reload-dir app
+
+e2e:
+	cd api && uv run python -m e2e.run $(SCENARIOS)
 
 lint:
 	cd web && npm run lint

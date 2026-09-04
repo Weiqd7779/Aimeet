@@ -106,7 +106,8 @@ class GeminiLiveEngine:
             return
         await self.events.put(EngineStatus("disconnected", detail))
 
-    async def send_audio(self, audio: bytes) -> None:
+    async def send_audio(self, audio: bytes, source: str | None = None) -> None:
+        del source
         await self._session.send_realtime_input(
             audio=types.Blob(data=audio, mime_type="audio/pcm;rate=16000")
         )
