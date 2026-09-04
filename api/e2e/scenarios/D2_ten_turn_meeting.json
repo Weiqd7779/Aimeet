@@ -21,6 +21,8 @@
     "min_transcripts_per_speaker": { "我": 5, "與會者": 5 },
     "no_simplified": true,
     "record_integrity": true,
+    "grounded_min": 1,
+    "grounded_max": 3,
     "decision_chosen_contains_any": ["Prototype C", "C"],
     "report_facts_contain_all": [
       ["1,020", "1020", "一千零二十"],
