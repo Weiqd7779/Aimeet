@@ -5,19 +5,31 @@ frames, then prepares traceable structured outputs.
 
 ## Run locally
 
-```bash
-cp .env.example api/.env
-make dev-api
-```
-
-In another terminal:
+需求：Python 3.12+、Node.js 20+（`uv` 由 setup 自動安裝）。
 
 ```bash
-make dev-web
+git clone https://github.com/Weiqd7779/Aimeet.git
+cd Aimeet
+make dev          # 自動跑 setup.sh（裝依賴、建 api/.env）後同時起 api 與 web
 ```
 
-The web app runs at http://localhost:3000 and the API at
-http://localhost:8000.
+`make dev` 會啟動 API（http://localhost:8000）與 web app（http://localhost:3000）。
+只想裝依賴不啟動時跑 `make setup`（等同 `./setup.sh`，可重複執行）；
+想分開兩個 terminal 跑就用 `make dev-api` 與 `make dev-web`。
+
+- 離線 demo：不需要任何 key，直接在頁面按 **Mock Demo**。
+- 真實模式：編輯 `api/.env`，填 `OPENAI_API_KEY=...`，設 `MOCK_MODE=false`、`LIVE_PROVIDER=openai`，
+  重啟 API 後按一般「開始」。
+
+### 用 Google Meet 測試
+
+1. 另開分頁進入 Google Meet 會議，回到 web app 按「開始」。
+2. Chrome 的分享視窗選 **該 Meet 分頁**，並勾選 **「同時分享分頁音訊」**——
+   音訊來自分頁而非本機麥克風，所以觸發語句要由會議中的**其他參與者／另一台裝置**說出。
+3. 想快點看到事件 `closed`，在 `api/.env` 加 `CONTEXT_AFTER_SECONDS=5`。
+4. 證據會寫到 `api/data/session_{id}/events.json` 與 `api/data/session_{id}/frames/*.jpg`。
+
+完整人工驗收步驟見 [`docs/e2e_google_meet_checklist.md`](docs/e2e_google_meet_checklist.md)。
 
 ## Environment variables
 
