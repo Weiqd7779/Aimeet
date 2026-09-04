@@ -25,6 +25,8 @@ __pycache__/
 
 api/e2e/.cache/
 api/e2e/results/
+api/e2e/audio/*.wav
+api/e2e/audio/*.pcm
 api/data/
 api/bench/.cache/
 api/bench/results/

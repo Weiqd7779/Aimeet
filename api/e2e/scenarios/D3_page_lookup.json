@@ -1,0 +1,36 @@
+{
+  "id": "D3",
+  "title": "頁面索引：翻頁不必精準，但「講成本上限的那頁」事後要找得到",
+  "synthesize": true,
+  "steps": [
+    { "at": 0.0, "frame": "chart" },
+    { "at": 1.0, "speaker": "me", "say": "先看成本。B 是一千零二十，超過八百五十的上限。" },
+    { "at": 7.5, "speaker": "remote", "say": "C 八百三十在上限內，滿意度中等。" },
+    { "at": 12.5, "speaker": "me", "say": "好，接下來看時程。" },
+    { "at": 14.5, "frame": "timeline" },
+    { "at": 16.0, "speaker": "remote", "say": "供應商兩週內交樣品，測試計畫下週三前由小林發出。" },
+    { "at": 22.5, "speaker": "me", "say": "那就這樣，握感的 issue 開高優先。" }
+  ],
+  "settle_seconds": 12,
+  "expect": {
+    "speaker_order": ["我", "與會者", "我", "與會者", "我"],
+    "no_simplified": true,
+    "record_integrity": true,
+    "scenes_min": 2,
+    "scenes_max": 2,
+    "scene_covers_served": true,
+    "facts_on_page": {
+      "一千零二十|1020|1,020": 1,
+      "八百三十|830": 1,
+      "小林": 2,
+      "issue|Issue": 2
+    },
+    "report_pages_min": 2,
+    "report_page_mentions": {
+      "1": ["成本", "上限", "850", "八百五"],
+      "2": ["時程", "樣品", "小林", "下週三", "兩週"]
+    },
+    "report_max_seconds": 120,
+    "judge": "pages 必須有兩頁：第一頁的 title/summary 講成本與上限（1020 / 850 / 830），第二頁講時程與待辦（兩週、下週三、小林、握感 issue）。「好，接下來看時程」這句落在哪一頁都可以。每頁 summary 只能寫該頁期間實際說出的內容，不要求逐字完整。"
+  }
+}

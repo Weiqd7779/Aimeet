@@ -15,6 +15,8 @@ export interface Frame {
   ts: number;
   jpeg_b64?: string;
   reason: FrameReason;
+  scene_id?: string | null;
+  scene_seq?: number;
 }
 
 export interface GroundedEvent {
@@ -121,6 +123,17 @@ export interface KeyFact {
   category: "number" | "date" | "person" | "constraint" | "requirement" | "action" | "other";
 }
 
+export interface ScenePage {
+  id: string;
+  seq: number;
+  first_ts: number;
+  last_ts: number;
+  cover_frame_id: string;
+  title: string;
+  summary: string;
+  utterance_count: number;
+}
+
 export interface MeetingReport {
   summary: string;
   key_facts: KeyFact[];
@@ -131,6 +144,7 @@ export interface MeetingReport {
   work_items: WorkItem[];
   open_questions: string[];
   uncertainties: string[];
+  scenes?: ScenePage[];
 }
 
 export interface ReportEnvelope {

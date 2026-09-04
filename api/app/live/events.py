@@ -38,4 +38,12 @@ class EngineStatus:
     detail: str | None = None
 
 
-EngineEvent = Transcript | ToolCall | IntentResolved | EngineStatus
+@dataclass
+class EchoDropped:
+    """A `me` utterance discarded because it duplicated remote speech (speaker echo)."""
+
+    text: str
+    ts: float
+
+
+EngineEvent = Transcript | ToolCall | IntentResolved | EngineStatus | EchoDropped

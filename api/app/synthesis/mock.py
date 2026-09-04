@@ -1,4 +1,5 @@
 from app.models import MeetingSession
+from app.synthesis.record import scene_pages
 from app.synthesis.schemas import DecisionRow, KeyFact, MeetingReport, WorkItem
 
 
@@ -92,4 +93,5 @@ def build_mock_report(session: MeetingSession) -> MeetingReport:
         work_items=work_items,
         open_questions=[],
         uncertainties=["Mock synthesis 未使用語意模型補充未明確說出的資訊。"],
+        scenes=scene_pages(session),
     )

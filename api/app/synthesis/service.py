@@ -21,30 +21,37 @@ from app.synthesis.prompt import (
     DIAGRAM_INSTRUCTIONS,
     EXTRACT_INSTRUCTIONS,
     PRD_INSTRUCTIONS,
+    SCENE_INDEX_INSTRUCTIONS,
     WORK_ITEMS_INSTRUCTIONS,
 )
-from app.synthesis.record import build_record
+from app.synthesis.record import build_record, scene_pages
 from app.synthesis.schemas import (
     Coverage,
     Diagram,
     Extraction,
     MeetingReport,
     Prd,
+    SceneIndex,
     WorkItems,
 )
 
 T = TypeVar("T", bound=BaseModel)
+MAX_IMAGES = 8
 
 
 def _frame_ids(session: MeetingSession) -> list[str]:
+    """Frames worth showing the model: anchored ones first, then one cover per page."""
     referenced = [event.frame_id for event in session.grounded_events if event.frame_id]
     ordered = list(dict.fromkeys(referenced))
+    for scene in session.scenes:
+        if scene.cover_frame_id not in ordered:
+            ordered.append(scene.cover_frame_id)
     for frame in reversed(session.frames):
         if frame.id not in ordered:
             ordered.append(frame.id)
-        if len(ordered) == 6:
+        if len(ordered) >= MAX_IMAGES:
             break
-    return ordered[:6]
+    return ordered[:MAX_IMAGES]
 
 
 def _dumps(payload: object) -> str:
@@ -132,10 +139,32 @@ async def synthesize(
             + _dumps([fact.model_dump() for fact in key_facts]),
         }
     ]
-    diagram, prd, work_items = await asyncio.gather(
+    scene_input = [
+        {
+            "type": "input_text",
+            "text": "pages：\n"
+            + _dumps(
+                [
+                    {k: v for k, v in page.items() if k != "items"}
+                    | {
+                        "utterances": [
+                            {"speaker": i["speaker"], "text": i["text"]}
+                            for i in page["items"]
+                            if i["type"] == "utterance"
+                        ]
+                    }
+                    for page in record["pages"]
+                ]
+            ),
+        }
+    ]
+    diagram, prd, work_items, index = await asyncio.gather(
         _call(client, selected_model, DIAGRAM_INSTRUCTIONS, basis, Diagram),
         _call(client, selected_model, PRD_INSTRUCTIONS, basis, Prd),
         _call(client, selected_model, WORK_ITEMS_INSTRUCTIONS, basis, WorkItems),
+        _call(client, selected_model, SCENE_INDEX_INSTRUCTIONS, scene_input, SceneIndex)
+        if record["pages"]
+        else _no_scenes(),
     )
 
     return MeetingReport(
@@ -148,4 +177,9 @@ async def synthesize(
         work_items=work_items.work_items,
         open_questions=extraction.open_questions,
         uncertainties=extraction.uncertainties,
+        scenes=scene_pages(session, index),
     )
+
+
+async def _no_scenes() -> None:
+    return None

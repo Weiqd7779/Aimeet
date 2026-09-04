@@ -12,7 +12,7 @@ from starlette.websockets import WebSocketDisconnect
 from app.config import settings
 from app.conflict import check_conflict
 from app.knowledge.store import KnowledgeStore
-from app.live.events import EngineStatus, IntentResolved, ToolCall, Transcript
+from app.live.events import EchoDropped, EngineStatus, IntentResolved, ToolCall, Transcript
 from app.live.gemini import GeminiLiveEngine
 from app.live.mock import MockLiveEngine
 from app.live.openai_rt import OpenAIRealtimeEngine
@@ -28,10 +28,44 @@ from app.models import (
 from app.record.store import Recorder
 
 DEICTIC = re.compile(
-    r"這個|那個|這裡|那裡|這邊|那邊|右邊|左邊|上面|下面|這塊|那塊|這張|那張|這頁|那頁"
-    r"|\b(?:this|that|here|there)\b",
+    # pointing words
+    r"這個|那個|這裡|那裡|這邊|那邊|右邊|左邊|上面|下面|這塊|那塊|這張|那張|這頁|那頁|這行|那行"
+    # talking about what is on screen
+    r"|螢幕|畫面|這頁|上一頁|下一頁|投影片|簡報|圖表|表格|這張圖|這個圖|柱狀圖|折線圖|截圖"
+    # English: only when the pointer is attached to a screen noun, so "this is fine" never fires
+    r"|\b(?:this|that|the)\s+(?:one|chart|table|slide|page|graph|diagram|row|column|number|screen)\b"
+    r"|\bon\s+(?:the\s+)?screen\b|\b(?:over|right)\s+here\b",
     re.IGNORECASE,
 )
+# Someone actually committing to something. Evaluating ("先看成本") is not a decision.
+COMMIT = re.compile(
+    r"決定|採用|就用|就選|就走|定案|拍板|就這樣|敲定|確定|同意|改成|改用|改採|那就|先用|先採"
+    r"|\b(?:decide|decided|go with|let's use|we'll use|settle on|approved)\b",
+    re.IGNORECASE,
+)
+UNDECIDED = re.compile(r"尚未|未定|待定|候選|評估中|考慮中|還沒|TBD", re.IGNORECASE)
+SAME_MEANING = 85  # rapidfuzz score above which two reasons/constraints are one
+MAX_LIST_ITEMS = 6  # reasons/constraints kept per decision list (newest win)
+# standalone numbers (850, 1,020) and option letters (A/B/C); "Q4" is neither
+DISTINGUISHING = re.compile(r"(?<![A-Za-z])\d[\d,.]*|(?<![A-Za-z0-9])[A-Z](?![A-Za-z0-9])")
+
+
+def _same_meaning(a: str, b: str) -> bool:
+    """Near-duplicate text. Numbers and option letters (A/B/C, 850, 1,020) are facts, so two
+    strings that differ in those are never merged no matter how similar the wording is."""
+    if set(DISTINGUISHING.findall(a)) != set(DISTINGUISHING.findall(b)):
+        return False
+    return fuzz.ratio(a, b) >= SAME_MEANING or (
+        min(len(a), len(b)) >= 8 and fuzz.partial_ratio(a, b) >= 95
+    )
+
+
+def _extend_unique(target: list[str], items: list[str], cap: int | None = None) -> None:
+    for item in items:
+        if item and not any(_same_meaning(item, existing) for existing in target):
+            target.append(item)
+    if cap is not None:
+        del target[:-cap]
 
 
 class LiveSessionManager:
@@ -117,8 +151,11 @@ class LiveSessionManager:
                 )
                 self.session.frames.append(frame)
                 del self.session.frames[:-200]
+                scene = self.recorder.add_frame(frame, jpeg_bytes)
                 await self.engine.send_frame(jpeg_bytes)
-                await self._emit("frame_ack", frame.model_dump(exclude={"jpeg_b64"}))
+                await self._emit(
+                    "frame_ack", {**frame.model_dump(exclude={"jpeg_b64"}), "scene_seq": scene.seq}
+                )
             elif message_type == "text":
                 await self.engine.send_text(str(message.get("text", "")))
             elif message_type == "confirm_decision":
@@ -153,6 +190,9 @@ class LiveSessionManager:
             await self._emit(
                 "utterance_resolved", {"utterance_id": event.utterance_id, "tools": event.tools}
             )
+        elif isinstance(event, EchoDropped):
+            self.recorder.note("echo_dropped", {"ts": event.ts, "text": event.text})
+            await self._emit("status", {"status": "echo_dropped", "detail": event.text})
         elif isinstance(event, EngineStatus):
             await self._emit("status", {"status": event.status, "detail": event.detail})
             return event.status in {"script_complete", "disconnected"}
@@ -169,17 +209,21 @@ class LiveSessionManager:
         if event.name == "create_anchor":
             source = self._utterance(event.utterance_id)
             # Grounding is only meaningful when someone actually pointed at something
-            # ("這個/右邊…") and there is a frame to point at; the model over-anchors otherwise.
+            # ("這個/右邊/螢幕上…") and there is a frame to point at. The model's own
+            # confidence is not a usable signal here (it reports >0.85 for merely naming a
+            # thing that is also on screen), so the pointing word is a hard requirement;
+            # everything else is still attached to the page via scenes.
             needs_frame = not isinstance(self.engine, MockLiveEngine)
-            if (needs_frame and not self.session.frames) or not (
-                source and DEICTIC.search(source.text)
-            ):
+            if (needs_frame and not self.session.frames) or not source:
                 return
+            if not DEICTIC.search(source.text):
+                return
+            target = str(event.args.get("target", ""))
             grounded = GroundedEvent(
                 ts=event.ts or self._elapsed(),
                 speaker=event.args.get("speaker") or source.speaker,
                 utterance=source.text,
-                target=str(event.args.get("target", "")),
+                target=target,
                 observation=str(event.args.get("observation", "")),
                 frame_id=self.session.frames[-1].id if self.session.frames else None,
                 confidence=float(event.args.get("confidence", 0.0)),
@@ -188,27 +232,36 @@ class LiveSessionManager:
             self.recorder.link(event.utterance_id, event.name, grounded.id)
             await self._emit("grounded_event", grounded.model_dump())
         elif event.name == "propose_decision":
+            source = self._utterance(event.utterance_id)
+            chosen = str(event.args.get("chosen", ""))
+            real_engine = not isinstance(self.engine, MockLiveEngine)
+            # Same lesson as anchors: the model proposes "decisions" for evaluation talk.
+            # Require a commitment word in the utterance and a definite choice.
+            if real_engine and (
+                not source or not COMMIT.search(source.text) or UNDECIDED.search(chosen)
+            ):
+                return
             proposal = Decision(
                 ts=event.ts or self._elapsed(),
                 topic=str(event.args.get("topic", "")),
-                chosen=str(event.args.get("chosen", "")),
+                chosen=chosen,
                 alternatives=list(event.args.get("alternatives", [])),
                 reasons_for=list(event.args.get("reasons_for", [])),
                 reasons_against=list(event.args.get("reasons_against", [])),
                 constraints=list(event.args.get("constraints", [])),
             )
-            decision = self._merge_decision(proposal)
-            options = self.session.decision_state.options_under_comparison
-            for option in [decision.chosen, *decision.alternatives]:
-                if option not in options:
-                    options.append(option)
-            for constraint in decision.constraints:
-                if constraint not in self.session.decision_state.constraints:
-                    self.session.decision_state.constraints.append(constraint)
-            hits = self.knowledge.search(f"{decision.topic} {decision.chosen}")
-            alerts = await check_conflict(decision, hits)
-            decision.conflicts.extend(alert.id for alert in alerts)
-            self.session.alerts.extend(alerts)
+            decision, choice_changed = self._merge_decision(proposal)
+            _extend_unique(
+                self.session.decision_state.options_under_comparison,
+                [decision.chosen, *decision.alternatives],
+            )
+            _extend_unique(self.session.decision_state.constraints, decision.constraints)
+            alerts: list[Alert] = []
+            if choice_changed:
+                # Only a new or changed choice can create a new conflict; re-checking the
+                # same choice every time someone restates it just stacks identical alerts.
+                hits = self.knowledge.search(f"{decision.topic} {decision.chosen}")
+                alerts = self._merge_alerts(decision, await check_conflict(decision, hits))
             self.recorder.link(event.utterance_id, event.name, decision.id)
             for alert in alerts:
                 self.recorder.link(event.utterance_id, "notify_speaker", alert.id)
@@ -251,25 +304,58 @@ class LiveSessionManager:
         ]
         return "\n".join(lines)
 
-    def _merge_decision(self, proposal: Decision) -> Decision:
+    def _merge_decision(self, proposal: Decision) -> tuple[Decision, bool]:
         """Fold a proposal into an existing candidate on the same topic instead of
-        stacking near-duplicates; the latest wording wins, lists are unioned."""
+        stacking near-duplicates; the latest wording wins, lists are unioned by meaning.
+        Returns (decision, whether the chosen option is new or changed)."""
         for existing in self.session.decision_state.decisions:
             if existing.status != "candidate":
                 continue
             same_topic = fuzz.token_set_ratio(existing.topic, proposal.topic) >= 70
             same_choice = fuzz.partial_ratio(existing.chosen, proposal.chosen) >= 70
             if same_topic or same_choice:
+                # Same option only if the wording is close *and* no fact (letter/number) differs.
+                changed = not (
+                    same_choice
+                    and set(DISTINGUISHING.findall(existing.chosen))
+                    == set(DISTINGUISHING.findall(proposal.chosen))
+                )
                 existing.chosen = proposal.chosen
                 existing.ts = proposal.ts
                 for field in ("alternatives", "reasons_for", "reasons_against", "constraints"):
-                    merged = getattr(existing, field)
-                    merged.extend(item for item in getattr(proposal, field) if item not in merged)
-                if existing.chosen in existing.alternatives:
-                    existing.alternatives.remove(existing.chosen)
-                return existing
+                    _extend_unique(
+                        getattr(existing, field), getattr(proposal, field), cap=MAX_LIST_ITEMS
+                    )
+                existing.alternatives = [
+                    a for a in existing.alternatives if not _same_meaning(a, existing.chosen)
+                ]
+                return existing, changed
         self.session.decision_state.decisions.append(proposal)
-        return proposal
+        return proposal, True
+
+    def _merge_alerts(self, decision: Decision, fresh: list[Alert]) -> list[Alert]:
+        """One open conflict per (decision, source): update its text instead of adding."""
+        kept: list[Alert] = []
+        for alert in fresh:
+            existing = next(
+                (
+                    a
+                    for a in self.session.alerts
+                    if a.kind == "conflict"
+                    and a.status == "open"
+                    and a.decision_id == decision.id
+                    and a.source == alert.source
+                ),
+                None,
+            )
+            if existing:
+                existing.detail, existing.title, existing.ts = alert.detail, alert.title, alert.ts
+                kept.append(existing)
+            else:
+                self.session.alerts.append(alert)
+                decision.conflicts.append(alert.id)
+                kept.append(alert)
+        return kept
 
     def _update_decision(self, decision_id: str, status: str) -> Decision:
         if status not in {"candidate", "confirmed", "rejected"}:

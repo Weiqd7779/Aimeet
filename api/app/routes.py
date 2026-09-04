@@ -10,6 +10,7 @@ from app.config import settings
 from app.knowledge.store import store
 from app.live.session import LiveSessionManager
 from app.models import MeetingSession
+from app.record.store import load_session, save_report
 from app.synthesis.service import synthesize as synthesize_report
 
 router = APIRouter()
@@ -19,6 +20,17 @@ sessions: dict[str, MeetingSession] = {}
 class SynthesisRequest(BaseModel):
     model: str | None = None
     force: bool = False
+
+
+def _session(session_id: str) -> MeetingSession:
+    """In-memory session, or the one rebuilt from its on-disk record after a restart."""
+    session = sessions.get(session_id)
+    if session is None:
+        session = load_session(settings.record_dir, session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        sessions[session_id] = session
+    return session
 
 
 @router.post("/sessions", status_code=201)
@@ -42,10 +54,7 @@ async def live_websocket(websocket: WebSocket, session_id: str) -> None:
 
 @router.get("/sessions/{session_id}")
 async def get_session(session_id: str) -> dict:
-    session = sessions.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    payload = session.model_dump(mode="json")
+    payload = _session(session_id).model_dump(mode="json")
     for frame in payload["frames"]:
         frame.pop("jpeg_b64", None)
     return payload
@@ -53,22 +62,22 @@ async def get_session(session_id: str) -> dict:
 
 @router.get("/sessions/{session_id}/frames/{frame_id}.jpg")
 async def get_frame(session_id: str, frame_id: str) -> Response:
-    session = sessions.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = _session(session_id)
     frame = next((item for item in session.frames if item.id == frame_id), None)
-    if frame is None:
+    if frame is not None and frame.jpeg_b64:
+        try:
+            data = base64.b64decode(frame.jpeg_b64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Invalid frame data") from exc
+        return Response(content=data, media_type="image/jpeg")
+    on_disk = Path(settings.record_dir) / session_id / "frames" / f"{frame_id}.jpg"
+    if not on_disk.exists():
         raise HTTPException(status_code=404, detail="Frame not found")
-    try:
-        data = base64.b64decode(frame.jpeg_b64, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="Invalid frame data") from exc
-    return Response(content=data, media_type="image/jpeg")
+    return Response(content=on_disk.read_bytes(), media_type="image/jpeg")
 
 
 def _record_path(session_id: str, name: str) -> Path:
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+    _session(session_id)
     path = Path(settings.record_dir) / session_id / name
     if not path.exists():
         raise HTTPException(status_code=404, detail="Record not written yet")
@@ -107,9 +116,7 @@ async def synthesize(
     session_id: str,
     request: SynthesisRequest | None = None,
 ) -> dict:
-    session = sessions.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = _session(session_id)
     request = request or SynthesisRequest()
     force = request.force
     model = request.model
@@ -122,6 +129,7 @@ async def synthesize(
             else settings.openai_model
         )
         session.report_mock = settings.synthesis_mock or not settings.openai_api_key
+        save_report(settings.record_dir, session)
     return {
         "report": session.report.model_dump(mode="json"),
         "model": session.report_model,
@@ -131,8 +139,8 @@ async def synthesize(
 
 @router.get("/sessions/{session_id}/report")
 async def get_report(session_id: str) -> dict:
-    session = sessions.get(session_id)
-    if session is None or session.report is None:
+    session = _session(session_id)
+    if session.report is None:
         raise HTTPException(status_code=404, detail="Report not found")
     return {
         "report": session.report.model_dump(mode="json"),

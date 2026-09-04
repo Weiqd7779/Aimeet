@@ -39,6 +39,8 @@ class Step:
     frame: str | None = None
     text: str | None = None
     pause: float = 0.4  # gap between `say` list items, seconds
+    echo: bool = False  # remote speech also leaks into the host mic (speakers, no headset)
+    clip: str | None = None  # real recording under e2e/audio/ instead of TTS (no extension)
 
 
 @dataclass
@@ -69,6 +71,7 @@ class RunResult:
     events: list[dict[str, Any]] = field(default_factory=list)
     report: dict[str, Any] | None = None
     record: dict[str, Any] | None = None
+    cover_frames_ok: dict[str, bool] = field(default_factory=dict)  # scene cover -> GET 200
     duration: float = 0.0
 
     def payloads(self, event_type: str) -> list[dict[str, Any]]:
@@ -114,6 +117,42 @@ def silence(seconds: float) -> bytes:
     return np.zeros(int(RATE * seconds), dtype="<i2").tobytes()
 
 
+def as_echo(pcm: bytes, gain: float = 0.35, delay_s: float = 0.08) -> bytes:
+    """What the host mic hears when the remote voice comes out of the laptop speakers:
+    quieter, slightly late, and low-passed by the room (cheap 3-tap smoothing)."""
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+    smoothed = np.convolve(samples, np.ones(3) / 3, mode="same") * gain
+    return silence(delay_s) + smoothed.astype("<i2").tobytes()
+
+
+AUDIO_DIR = Path(__file__).with_name("audio")
+
+
+def load_clip(name: str) -> bytes:
+    """Real recording (`e2e/audio/<name>.wav|.pcm`) as 16 kHz mono PCM16."""
+    import wave
+
+    wav = AUDIO_DIR / f"{name}.wav"
+    if wav.exists():
+        with wave.open(str(wav), "rb") as handle:
+            frames = handle.readframes(handle.getnframes())
+            channels, width, rate = (
+                handle.getnchannels(),
+                handle.getsampwidth(),
+                handle.getframerate(),
+            )
+        if width != 2:
+            raise ValueError(f"{wav}: need 16-bit PCM, got {width * 8}-bit")
+        samples = np.frombuffer(frames, dtype="<i2")
+        if channels > 1:
+            samples = samples.reshape(-1, channels).mean(axis=1).astype("<i2")
+        return _trim(resample_pcm16(samples.tobytes(), source_rate=rate, target_rate=RATE))
+    raw = AUDIO_DIR / f"{name}.pcm"
+    if raw.exists():
+        return _trim(raw.read_bytes())
+    raise FileNotFoundError(f"no recording named {name!r} under {AUDIO_DIR}")
+
+
 def _font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
     for candidate in ("msjh.ttc", "C:/Windows/Fonts/msjh.ttc", "NotoSansCJK-Regular.ttc"):
         try:
@@ -141,6 +180,19 @@ def render_frame(kind: str) -> bytes:
             x = 720 + index * 150
             draw.rectangle((x, 600 - height, x + 90, 600), fill="#2c7be5")
             draw.text((x + 30, 620), label, fill="black", font=body)
+    elif kind == "timeline":
+        draw.text((60, 120), "Prototype C 樣品時程", fill="black", font=body)
+        milestones = [
+            ("樣品交付", "供應商 · 2 週"),
+            ("測試計畫", "小林 · 下週三"),
+            ("握感 issue", "高優先"),
+        ]
+        for index, (label, note) in enumerate(milestones):
+            x = 120 + index * 380
+            draw.ellipse((x, 300, x + 40, 340), fill="#e5533c")
+            draw.text((x - 20, 360), label, fill="black", font=body)
+            draw.text((x - 20, 400), note, fill="gray", font=body)
+        draw.line((140, 320, 900, 320), fill="black", width=4)
     else:
         draw.text((60, 200), kind, fill="black", font=body)
     buffer = io.BytesIO()
@@ -174,15 +226,29 @@ async def _room_tone(ws: Any, speaker: str, speaking: asyncio.Lock) -> None:
 
 async def _utterance_pcm(step: Step) -> bytes:
     """One or more clips; list items are joined with a short (sub-VAD) pause."""
-    parts = step.say if isinstance(step.say, list) else [step.say or ""]
-    clips = [await tts(part, step.speaker or "me") for part in parts]
-    joined = silence(step.pause).join(clips)
+    if step.clip:
+        joined = load_clip(step.clip)
+    else:
+        parts = step.say if isinstance(step.say, list) else [step.say or ""]
+        clips = [await tts(part, step.speaker or "me") for part in parts]
+        joined = silence(step.pause).join(clips)
     return joined + silence(1.2)  # tail so server VAD closes the turn
 
 
+def _speaks(step: Step) -> bool:
+    return bool(step.speaker) and (step.say is not None or step.clip is not None)
+
+
 async def _run_step(ws: Any, step: Step) -> None:
-    if step.say is not None and step.speaker:
-        await _stream_audio(ws, step.speaker, await _utterance_pcm(step))
+    if _speaks(step):
+        pcm = await _utterance_pcm(step)
+        assert step.speaker
+        if step.echo and step.speaker == "remote":
+            await asyncio.gather(
+                _stream_audio(ws, "remote", pcm), _stream_audio(ws, "me", as_echo(pcm))
+            )
+        else:
+            await _stream_audio(ws, step.speaker, pcm)
     elif step.frame:
         jpeg = render_frame(step.frame)
         await ws.send(
@@ -238,7 +304,10 @@ async def run_scenario(scenario: Scenario) -> RunResult:
 
             async def scheduled(step: Step) -> None:
                 await asyncio.sleep(step.at)
-                if step.speaker:
+                if step.speaker and step.echo:
+                    async with locks["remote"], locks["me"]:  # echo occupies the mic too
+                        await _run_step(ws, step)
+                elif step.speaker:
                     async with locks[step.speaker]:
                         await _run_step(ws, step)
                 else:
@@ -261,12 +330,18 @@ async def run_scenario(scenario: Scenario) -> RunResult:
             for task in room_tone:
                 task.cancel()
             collector.cancel()
-        record = await http.get(f"/sessions/{session_id}/record")
-        if record.status_code == 200:
-            result.record = record.json()
         if scenario.synthesize:
             response = await http.post(f"/sessions/{session_id}/synthesize")
             response.raise_for_status()
             result.report = response.json()
+        # after synthesis, so the record carries the page titles synthesis wrote back
+        record = await http.get(f"/sessions/{session_id}/record")
+        if record.status_code == 200:
+            result.record = record.json()
+            for scene in result.record.get("scenes", []):
+                cover = await http.get(
+                    f"/sessions/{session_id}/frames/{scene['cover_frame_id']}.jpg"
+                )
+                result.cover_frames_ok[scene["id"]] = cover.status_code == 200
     result.duration = time.monotonic() - started
     return result
