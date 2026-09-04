@@ -8,7 +8,8 @@ from openai import AsyncOpenAI
 
 from app.config import Settings, settings
 from app.live.audio import resample_pcm16
-from app.live.events import EngineEvent, EngineStatus, IntentResolved, Transcript
+from app.live.echo import HOLD_SECONDS, MAX_HOLD_SECONDS, EchoFilter
+from app.live.events import EchoDropped, EngineEvent, EngineStatus, IntentResolved, Transcript
 from app.live.reasoner import Reasoner
 
 SPEAKER_LABELS = {"me": "我", "remote": "與會者"}
@@ -16,7 +17,8 @@ NOISE_REDUCTION = {"me": "near_field", "remote": "far_field"}
 TRANSCRIPTION_PROMPT = (
     "台灣繁體中文的產品與工程會議對話，夾雜英文技術詞彙。請以繁體中文輸出。"
     "常見詞彙：Prototype A、Prototype B、Prototype C、方案A、方案B、Q4、API、Redis、"
-    "cache layer、issue、BOM、NT$、矽膠包覆、握感、樣品、供應商。"
+    "cache layer、issue、BOM、NT$、成本上限、使用者滿意度、滿意度、矽膠包覆、握感、樣品、"
+    "供應商、測試計畫、候選、優先度。"
 )
 
 
@@ -60,6 +62,8 @@ class OpenAIRealtimeEngine:
         self._client: AsyncOpenAI | None = None
         self.reasoner: Reasoner | None = None
         self._transcribers: dict[str, _Connection] = {}
+        self._echo = EchoFilter()
+        self._remote_talking = False  # remote VAD: speech_started .. transcription.completed
         self._pending: set[asyncio.Task[None]] = set()
         self._started = time.monotonic()
         self._last_frame = 0.0
@@ -116,15 +120,22 @@ class OpenAIRealtimeEngine:
                         self._speech_start[item_id] = (
                             self._buffer_start.get(source, self._elapsed()) + start_ms / 1000
                         )
+                    if source == "remote":
+                        self._remote_talking = True
                 elif event_type == "conversation.item.input_audio_transcription.completed":
                     text = getattr(event, "transcript", "").strip()
                     ts = self._speech_start.pop(getattr(event, "item_id", None), None)
+                    if source == "remote":
+                        self._remote_talking = False
                     if text:
                         transcript = Transcript(
                             text=text, ts=ts if ts is not None else self._elapsed(), speaker=speaker
                         )
-                        await self.events.put(transcript)
-                        self._spawn_reasoning(transcript)
+                        if source == "remote":
+                            self._echo.note_remote(transcript.ts, transcript.text)
+                            await self._commit(transcript)
+                        else:
+                            self._spawn(self._commit_me(transcript))
                 elif event_type == "error":
                     await self._fail(f"{speaker} transcription: {getattr(event, 'error', event)}")
                     return
@@ -133,10 +144,28 @@ class OpenAIRealtimeEngine:
         except Exception as exc:  # noqa: BLE001
             await self._fail(f"{speaker} transcription: {exc}")
 
-    def _spawn_reasoning(self, transcript: Transcript) -> None:
-        task = asyncio.create_task(self._reason(transcript))
+    def _spawn(self, coro: Any) -> None:
+        task = asyncio.create_task(coro)
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
+
+    async def _commit(self, transcript: Transcript) -> None:
+        await self.events.put(transcript)
+        self._spawn(self._reason(transcript))
+
+    async def _commit_me(self, transcript: Transcript) -> None:
+        # The remote twin of an echoed sentence may finish later (the echo is quieter, so
+        # its VAD often closes first). Wait a grace period, and keep waiting while the
+        # remote channel is still mid-sentence - an echo can only exist while they talk.
+        await asyncio.sleep(HOLD_SECONDS)
+        waited = HOLD_SECONDS
+        while self._remote_talking and waited < MAX_HOLD_SECONDS:
+            await asyncio.sleep(0.2)
+            waited += 0.2
+        if self._echo.is_echo(transcript.ts, transcript.text):
+            await self.events.put(EchoDropped(transcript.text, transcript.ts))
+            return
+        await self._commit(transcript)
 
     async def _reason(self, transcript: Transcript) -> None:
         if not self.reasoner:

@@ -81,6 +81,37 @@ class WorkItems(BaseModel):
     work_items: list[WorkItem] = Field(...)
 
 
+class SceneEntry(BaseModel):
+    """Index entry for one page of the shared screen."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: str
+    title: str = Field(..., description="這一頁在講什麼，8 字內")
+    summary: str = Field(..., description="這一頁上說了哪些事實與結論，2-3 句")
+
+
+class SceneIndex(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scenes: list[SceneEntry] = Field(...)
+
+
+class ScenePage(BaseModel):
+    """Scene as shown in the report: index entry + timing + cover frame."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    seq: int
+    first_ts: float
+    last_ts: float
+    cover_frame_id: str
+    title: str
+    summary: str
+    utterance_count: int
+
+
 # --- Final report (shape consumed by the frontend) ---------------------------
 
 
@@ -96,3 +127,4 @@ class MeetingReport(BaseModel):
     work_items: list[WorkItem] = Field(...)
     open_questions: list[str] = Field(...)
     uncertainties: list[str] = Field(...)
+    scenes: list[ScenePage] = Field(default_factory=list)

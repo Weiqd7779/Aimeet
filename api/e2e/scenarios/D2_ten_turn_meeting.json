@@ -1,6 +1,6 @@
 {
   "id": "D2",
-  "title": "十句混合對話：紀錄完整、歸屬正確、報告資訊不漏",
+  "title": "十句混合對話 + 翻頁：紀錄完整、歸屬正確、依頁歸檔、報告資訊不漏",
   "synthesize": true,
   "steps": [
     { "at": 0.0, "frame": "chart" },
@@ -11,6 +11,7 @@
     { "at": 26.0, "speaker": "me", "say": "還是超過。那 Prototype C 呢？它是八百三十元。" },
     { "at": 31.5, "speaker": "remote", "say": "Prototype C 的滿意度中等，握感的問題還沒解，供應商說兩週內可以交樣品。" },
     { "at": 38.5, "speaker": "me", "say": "好，那我們決定 Q4 先採用 Prototype C。Prototype B 留做下一季的候選。" },
+    { "at": 43.0, "frame": "timeline" },
     { "at": 45.0, "speaker": "remote", "say": "我會在下週三前把 C 的樣品測試計畫發給大家，負責人是小林。" },
     { "at": 51.5, "speaker": "me", "say": "另外請把握感問題開一張 issue 追蹤，優先度設高。" },
     { "at": 57.0, "speaker": "remote", "say": "沒問題，我今天就開。" }
@@ -24,6 +25,24 @@
     "grounded_min": 1,
     "grounded_max": 3,
     "decision_chosen_contains_any": ["Prototype C", "C"],
+    "max_decision_events": 4,
+    "max_reasons_per_decision": 12,
+    "max_conflicts_per_source": 1,
+    "scenes_min": 2,
+    "scenes_max": 2,
+    "scene_covers_served": true,
+    "facts_on_page": {
+      "一千零二十|1020|1,020": 1,
+      "九百二十|920": 1,
+      "八百三十|830": 1,
+      "小林": 2,
+      "issue|Issue": 2
+    },
+    "report_pages_min": 2,
+    "report_page_mentions": {
+      "1": ["成本", "滿意度", "Prototype"],
+      "2": ["小林", "測試計畫", "時程", "issue", "握感"]
+    },
     "report_facts_contain_all": [
       ["1,020", "1020", "一千零二十"],
       ["850", "八百五十"],
@@ -37,6 +56,6 @@
       "握感"
     ],
     "report_max_seconds": 150,
-    "judge": "檢查報告：(1) key_facts 必須涵蓋所有數字（1020、850、920、830、八成）、時程（兩週、下週三）、人名（小林）、待辦（測試計畫、握感 issue 高優先），且 speaker 標示與腳本一致；(2) decision_table 有採用 Prototype C、B 為下一季候選；(3) 沒有把腳本、分享畫面、知識庫都沒有的內容寫成事實。數字寫法（1,020 / 1020 / 一千零二十）視為相同；語音辨識同音錯字不算捏造。"
+    "judge": "檢查報告：(1) key_facts 必須涵蓋所有數字（1020、850、920、830、八成）、時程（兩週、下週三）、人名（小林）、待辦（測試計畫、握感 issue 高優先），且 speaker 標示與腳本一致；(2) decision_table 有採用 Prototype C、B 為下一季候選；(3) 沒有把腳本、分享畫面、知識庫都沒有的內容寫成事實；(4) pages 有兩頁，第一頁的 title/summary 是成本與滿意度比較，第二頁是時程與待辦。數字寫法（1,020 / 1020 / 一千零二十）視為相同；語音辨識同音錯字不算捏造；翻頁前後幾秒的句子同時出現在兩頁屬正常。"
   }
 }

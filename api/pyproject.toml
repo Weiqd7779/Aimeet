@@ -16,6 +16,7 @@ dependencies = [
     "httpx",
     "rapidfuzz",
     "numpy",
+    "pillow>=12.3.0",
 ]
 
 [dependency-groups]

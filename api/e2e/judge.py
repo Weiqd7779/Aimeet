@@ -96,6 +96,11 @@ def hard_rules(result: RunResult) -> Verdict:
         ]
         verdict.add(f"must_not_contain[{speaker}]", not leaked, f"leaked: {leaked}")
 
+    statuses = [s.get("status") for s in result.payloads("status")]
+    if "echo_dropped_min" in expect:
+        dropped = statuses.count("echo_dropped")
+        verdict.add("echo_dropped_min", dropped >= expect["echo_dropped_min"], f"{dropped}")
+
     decisions = result.payloads("decision")
     if "decision_chosen_contains_any" in expect:
         needles = expect["decision_chosen_contains_any"]
@@ -103,6 +108,21 @@ def hard_rules(result: RunResult) -> Verdict:
         verdict.add("decision_chosen", hit, f"chosen={[d['chosen'] for d in decisions]}")
     if "max_decisions" in expect:
         verdict.add("max_decisions", len(decisions) <= expect["max_decisions"], f"{len(decisions)}")
+    if "max_decision_events" in expect:
+        # restating the same decision must update it, not re-announce it over and over
+        verdict.add(
+            "max_decision_events",
+            len(decisions) <= expect["max_decision_events"],
+            f"{len(decisions)} decision events",
+        )
+    if "max_reasons_per_decision" in expect:
+        final = {d["id"]: d for d in decisions}
+        worst = max(
+            (len(d["reasons_for"]) + len(d["reasons_against"]) for d in final.values()), default=0
+        )
+        verdict.add(
+            "max_reasons_per_decision", worst <= expect["max_reasons_per_decision"], f"{worst}"
+        )
 
     grounded = result.payloads("grounded_event")
     if "grounded_min" in expect:
@@ -123,6 +143,65 @@ def hard_rules(result: RunResult) -> Verdict:
         verdict.add("alert_kinds", not missing, f"missing {missing}, got {kinds}")
     if "max_alerts" in expect:
         verdict.add("max_alerts", len(alerts) <= expect["max_alerts"], f"{len(alerts)}")
+    if "max_conflicts_per_source" in expect:
+        final = {a["id"]: a for a in alerts if a["kind"] == "conflict"}
+        per_source: dict[str | None, int] = {}
+        for alert in final.values():
+            per_source[alert.get("source")] = per_source.get(alert.get("source"), 0) + 1
+        worst = max(per_source.values(), default=0)
+        verdict.add(
+            "max_conflicts_per_source",
+            worst <= expect["max_conflicts_per_source"],
+            f"{per_source}",
+        )
+
+    record = result.record or {}
+    scenes = record.get("scenes", [])
+    seq_of = {s["id"]: s["seq"] + 1 for s in scenes}  # 1-based page numbers
+    if "scenes_min" in expect:
+        verdict.add("scenes_min", len(scenes) >= expect["scenes_min"], f"{len(scenes)} pages")
+    if "scenes_max" in expect:
+        verdict.add("scenes_max", len(scenes) <= expect["scenes_max"], f"{len(scenes)} pages")
+    if expect.get("scene_covers_served"):
+        bad = [s for s, ok in result.cover_frames_ok.items() if not ok]
+        verdict.add("scene_covers_served", bool(scenes) and not bad, f"missing covers: {bad}")
+    if "facts_on_page" in expect:
+        # phrase -> expected page; pass if the utterance sits on that page or an adjacent one
+        misplaced = []
+        for phrase, page in expect["facts_on_page"].items():
+            # "a|b|c" = accepted spellings of the same fact (830 / 八百三十)
+            spellings = phrase.split("|")
+            hits = [
+                u
+                for u in record.get("utterances", [])
+                if any(alt in u["text"] for alt in spellings)
+            ]
+            if not hits:
+                misplaced.append((phrase, "not transcribed"))
+                continue
+            pages = {seq_of.get(u["scene_id"]) for u in hits} | {
+                seq_of.get(a) for u in hits for a in u.get("adjacent_scene_ids", [])
+            }
+            if page not in pages:
+                misplaced.append((phrase, f"on {sorted(p for p in pages if p)} want {page}"))
+        verdict.add("facts_on_page", not misplaced, f"{misplaced}" if misplaced else "")
+
+    report_pages = (result.report or {}).get("report", {}).get("scenes", [])
+    if "report_pages_min" in expect:
+        verdict.add(
+            "report_pages_min",
+            len(report_pages) >= expect["report_pages_min"],
+            f"{len(report_pages)}",
+        )
+    if "report_page_mentions" in expect:
+        # page number -> any of these phrases must appear in that page's title or summary
+        missing = []
+        for page, alternatives in expect["report_page_mentions"].items():
+            entry = next((p for p in report_pages if p["seq"] + 1 == int(page)), None)
+            blob = f"{entry['title']} {entry['summary']}" if entry else ""
+            if not any(alt in blob for alt in alternatives):
+                missing.append((page, blob[:60]))
+        verdict.add("report_page_mentions", not missing, f"{missing}" if missing else "")
 
     if expect.get("record_integrity"):
         record = result.record or {}
@@ -178,6 +257,13 @@ def _summary(result: RunResult) -> dict[str, Any]:
         "alerts": result.payloads("alert"),
         "report": (result.report or {}).get("report"),
         "record_utterances": (result.record or {}).get("utterances"),
+        "pages": [
+            {k: v for k, v in s.items() if k not in {"hash", "frame_ids"}}
+            for s in (result.record or {}).get("scenes", [])
+        ],
+        "echo_dropped": [
+            s.get("detail") for s in result.payloads("status") if s.get("status") == "echo_dropped"
+        ],
     }
 
 
@@ -191,17 +277,25 @@ async def llm_judge(result: RunResult, verdict: Verdict) -> None:
         {"at": s.at, "speaker": s.speaker, "say": s.say, "frame": s.frame, "text": s.text}
         for s in result.scenario.steps
     ]
-    frames_note = (
-        "\n\n分享畫面內容（frame=chart）：標題「Q4 Prototype 評估」；左側成本表 Prototype A NT$780、"
-        "Prototype B NT$1,020、Prototype C NT$830；右側「使用者滿意度」長條圖 A 低、B 最高、C 中等。"
-        "系統看得到這張畫面，引用其中的內容屬於合法證據。"
-        if any(s.frame == "chart" for s in result.scenario.steps)
-        else ""
-    )
+    frames_note = ""
+    if any(s.frame == "chart" for s in result.scenario.steps):
+        frames_note += (
+            "\n\n分享畫面（frame=chart）：標題「Q4 Prototype 評估」；左側成本表 Prototype A NT$780、"
+            "Prototype B NT$1,020、Prototype C NT$830；右側「使用者滿意度」長條圖 A 低、B 最高、C 中等。"
+        )
+    if any(s.frame == "timeline" for s in result.scenario.steps):
+        frames_note += (
+            "\n分享畫面（frame=timeline）：標題「Prototype C 樣品時程」；三個里程碑："
+            "樣品交付（供應商 · 2 週）、測試計畫（小林 · 下週三）、握感 issue（高優先）。"
+        )
+    if frames_note:
+        frames_note += "\n系統看得到這些畫面，引用其中的內容屬於合法證據。"
     prompt = (
         "你是會議 AI 產品的驗收裁判。以下是測試腳本（模擬兩位說話者實際說的話）、"
         "系統產出的事件，以及通過條件。請只依通過條件判斷，不要自行加嚴：\n"
         "- 逐字稿比對時，標點、全半形、空白、簡繁與少數同音錯字視為相同；語意明顯不同才算失真。\n"
+        "- 說話者標籤要嚴格比對：通過條件提到「我」或「與會者」說了什麼，就必須在該 speaker 的行找到；"
+        "同樣內容出現在另一個 speaker 底下不算通過。\n"
         "- 若同一句被切成兩行，只在通過條件明確要求「一行」時才算失敗。\n"
         "- 系統可引用內建知識庫（ADR、過去決議、需求文件，例如 Prototype A 的過去決議、成本上限）；"
         "這些內容出現在報告中不算捏造。只有腳本與知識庫都沒有的內容才算「無中生有」。\n"

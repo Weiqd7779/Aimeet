@@ -1,14 +1,13 @@
 import asyncio
-import base64
 
 import pytest
 
 from app.config import settings
 from app.live.events import ToolCall, Transcript
 from app.vision import heuristic_verdict
-from tests.live_harness import build_manager, wait_for
+from tests.live_harness import build_manager, jpeg_b64, wait_for
 
-JPEG = base64.b64encode(b"fake-jpeg").decode("ascii")
+JPEG = jpeg_b64()
 
 FILLERS = ["這件事回去再說", "這個方法昨天討論過"]
 REFERENCES = ["你看這邊這個按鈕太小", "你看右邊這張圖的色階怪怪的"]

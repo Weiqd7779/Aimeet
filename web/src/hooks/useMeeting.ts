@@ -156,7 +156,7 @@ export function useMeeting() {
     dispatch({ type: "event", event });
     if (event.type === "transcript" && mockRef.current) {
       const transcript = event.payload as TranscriptEntry;
-      if (/這個|那個|這裡|那裡|右邊|左邊|上面|下面|這塊|那張|this|that|here/i.test(transcript.text)) {
+      if (/這個|那個|這裡|那裡|這邊|那邊|右邊|左邊|上面|下面|這塊|那張|這頁|螢幕|畫面|投影片|簡報|圖表|表格|\b(?:this|that|the)\s+(?:one|chart|table|slide|page|graph|diagram|screen)\b|\bon\s+(?:the\s+)?screen\b/i.test(transcript.text)) {
         samplerRef.current?.trigger("deictic");
       }
     }

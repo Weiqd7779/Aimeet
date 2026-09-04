@@ -1,0 +1,20 @@
+{
+  "id": "A5",
+  "title": "開喇叭：與會者的聲音從主持人麥克風漏回來，不得變成「我」的發言",
+  "steps": [
+    { "at": 0.5, "speaker": "remote", "say": "這張圖表顯示 Prototype B 的滿意度最高，測試者都給正面回饋。", "echo": true },
+    { "at": 8.0, "speaker": "me", "say": "但是 B 的成本是一千零二十，超過我們八百五的上限。" },
+    { "at": 14.5, "speaker": "remote", "say": "供應商說兩週內可以交樣品。", "echo": true },
+    { "at": 19.5, "speaker": "me", "say": "好。" }
+  ],
+  "settle_seconds": 10,
+  "expect": {
+    "speaker_order": ["與會者", "我", "與會者", "我"],
+    "min_transcripts_per_speaker": { "與會者": 2, "我": 2 },
+    "max_transcripts_per_speaker": { "我": 2 },
+    "must_not_contain": { "我": ["滿意度最高", "正面回饋", "兩週內可以交樣品"] },
+    "echo_dropped_min": 1,
+    "record_integrity": true,
+    "judge": "「我」的逐字稿只能有主持人自己說的兩句（成本超過上限、好）；與會者說的「滿意度最高」「兩週內交樣品」不得出現在「我」的行。與會者兩句都要有。echo_dropped 列出被丟掉的回音即可，不要求內容完整。"
+  }
+}

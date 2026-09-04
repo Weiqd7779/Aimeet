@@ -42,19 +42,29 @@ frames, then prepares traceable structured outputs.
 FastAPI LiveSessionManager (api/app/live/session.py)
  ├─ 轉錄連線 me      ─┐ 兩人各自獨立通道、獨立 VAD → 不混音、歸屬不會錯
  ├─ 轉錄連線 remote  ─┘ 逐字稿 ts = 開口時間 (speech_started)
+ ├─ EchoFilter (live/echo.py)  開喇叭時與會者的話從麥克風漏回：me 句與 4s 內 remote 句相似即丟棄
  └─ Reasoner (Responses API)  每句一次：近 12 句 + 最新截圖 + 決策清單 → 工具呼叫
-                              session 層守門：無畫面/無指示語不建 anchor；同主題決策合併
+                              session 層守門：anchor 要有指示語/畫面詞 + 畫面；決策要有拍板詞；
+                              同主題決策合併、理由語意去重、同來源 conflict 只留一條
         ▼
 Recorder (api/app/record/store.py)  write-first、append-only
  data/sessions/{id}/events.jsonl   事件流（source of truth）
  data/sessions/{id}/record.json    aimeet.record.v1 快照（給搜尋 / RAG）
  data/sessions/{id}/record.md      給人看
-        ▼  Generate Report
-Synthesis (api/app/synthesis/)  luna：extract → coverage → derive(Mermaid/PRD/Work items)
+ data/sessions/{id}/frames/*.jpg   每張截圖落地
+ data/sessions/{id}/report.json    會後報告
+ SceneTracker (record/scenes.py)   截圖 dHash 分「頁」；每句記 scene_id (+ 邊界 ±4s 的 adjacent)
+        ▼  Generate Report（API 重啟後 sessions 從硬碟重建）
+Synthesis (api/app/synthesis/)  luna：extract → coverage → derive(Mermaid/PRD/Work items) ∥ scene index
+                                輸入含 pages（依頁重排的內容，邊界句列在兩頁）；輸出含每頁 title/summary
 ```
 
 設計原則：資訊不能掉、說話者不能錯；逐字稿切幾行不重要（讀取端合併同人連續片段）；
 JSON 是唯一真相、MD 是衍生品；原始片段不改寫。
+
+兩層畫面連結：**scene（頁）** 每句都有、不需要有人指東西、容許翻頁前後幾秒重疊 → 回答「講成本那頁在講什麼」；
+**anchor** 只在有人指畫面（「右邊這張表」）時建立 → 回答「他說的『那個』是什麼」。
+模型的 confidence 不能當 anchor 放行條件（實測十句對話會出 12 個），指示語是硬條件。
 
 ## Run locally
 
@@ -89,8 +99,11 @@ make dev          # 自動跑 setup.sh（裝依賴、建 api/.env）後同時起
 | 指令 | 內容 |
 |---|---|
 | `cd api && uv run pytest` | 離線單元測試（mock 引擎、Recorder 一致性） |
-| `make e2e` / `uv run python -m e2e.run A4 D2` | 對**運行中的 API** 跑實際使用驗收（TTS 模擬兩位說話者 + 合成畫面 → 硬規則 + LLM 裁判），報告在 `api/e2e/results/` |
+| `make e2e` / `uv run python -m e2e.run A4 D2` | 對**運行中的 API** 跑實際使用驗收（TTS 模擬兩位說話者 + 合成畫面 + 合成喇叭回音 → 硬規則 + LLM 裁判），報告在 `api/e2e/results/` |
+| `uv run python -m e2e.calibrate` | 裁判校準：故意弄壞（speaker 對調 / 少數字 / 少一句）必須被判 FAIL |
 | `uv run python -m bench.stt` | STT A/B benchmark，結果在 `api/bench/results/` |
+
+真人錄音：放到 `api/e2e/audio/<name>.wav`（16-bit PCM，任何取樣率），scenario step 用 `"clip": "<name>"` 取代 `say`。
 
 驗收標準與已知限制見 `TEST_PLAN.md`。
 

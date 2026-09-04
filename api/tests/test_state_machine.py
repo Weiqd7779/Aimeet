@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 from pathlib import Path
 
@@ -7,9 +6,9 @@ import pytest
 
 from app.config import settings
 from app.live.events import ToolCall, Transcript
-from tests.live_harness import build_manager, wait_for
+from tests.live_harness import build_manager, jpeg_b64, jpeg_bytes, wait_for
 
-JPEG = base64.b64encode(b"fake-jpeg").decode("ascii")
+JPEG = jpeg_b64()
 
 
 @pytest.mark.asyncio
@@ -63,7 +62,7 @@ async def test_event_lifecycle_time_range_and_nearest_frame(monkeypatch, tmp_pat
 
     events_path = tmp_path / f"session_{manager.session.id}" / "events.json"
     frame_path = tmp_path / f"session_{manager.session.id}" / "frames" / f"{nearest.id}.jpg"
-    assert frame_path.read_bytes() == b"fake-jpeg"
+    assert frame_path.read_bytes() == jpeg_bytes()
     stored = json.loads(events_path.read_text(encoding="utf-8"))
     assert len(stored) == 1
     assert stored[0]["event_id"] == triggered["event_id"]

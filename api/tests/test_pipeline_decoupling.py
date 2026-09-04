@@ -5,9 +5,9 @@ import pytest
 
 from app.live import session as session_module
 from app.live.events import ToolCall, Transcript
-from tests.live_harness import build_manager, wait_for
+from tests.live_harness import build_manager, jpeg_b64, jpeg_bytes, wait_for
 
-JPEG = base64.b64encode(b"fake-jpeg").decode("ascii")
+JPEG = jpeg_b64()
 PCM = base64.b64encode(b"\x00\x01" * 16).decode("ascii")
 ANCHOR_TEXT = "你看這邊這個按鈕太小"
 
@@ -35,8 +35,10 @@ async def test_slow_conflict_check_does_not_block_ingestion(monkeypatch) -> None
     run_task = asyncio.create_task(manager.run())
     await wait_for(lambda: bool(websocket.payloads("status")))
 
+    engine.events.put_nowait(Transcript(text="我們決定就採用 C 方案", ts=1.0, speaker="與會者"))
+    await wait_for(lambda: bool(websocket.payloads("transcript")))
     engine.events.put_nowait(
-        ToolCall(name="propose_decision", args={"topic": "t", "chosen": "c"}, ts=1.0)
+        ToolCall(name="propose_decision", args={"topic": "t", "chosen": "C 方案"}, ts=1.0)
     )
     await wait_for(started.is_set)
 
@@ -97,7 +99,7 @@ async def test_create_anchor_requests_deictic_frame() -> None:
     websocket.incoming.put_nowait(
         {"type": "frame", "jpeg_b64": JPEG, "ts": 1.0, "reason": "deictic"}
     )
-    await wait_for(lambda: engine.frames[-1] == (b"fake-jpeg", "deictic"))
+    await wait_for(lambda: engine.frames[-1] == (jpeg_bytes(), "deictic"))
 
     websocket.incoming.put_nowait({"type": "end"})
     await asyncio.wait_for(run_task, timeout=5)

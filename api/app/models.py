@@ -81,6 +81,21 @@ class Frame(BaseModel):
     ts: float
     jpeg_b64: str
     reason: FrameReason
+    scene_id: str | None = None
+
+
+class Scene(BaseModel):
+    """One 'page' of the shared screen: a run of visually similar frames."""
+
+    id: str = Field(default_factory=new_id)
+    seq: int
+    first_ts: float
+    last_ts: float
+    frame_ids: list[str] = Field(default_factory=list)
+    cover_frame_id: str
+    hash: int = 0
+    title: str | None = None
+    summary: str | None = None
 
 
 class DecisionState(BaseModel):
@@ -115,6 +130,8 @@ class UtteranceRecord(BaseModel):
     decision_ids: list[str] = Field(default_factory=list)
     alert_ids: list[str] = Field(default_factory=list)
     frame_id: str | None = None
+    scene_id: str | None = None
+    adjacent_scene_ids: list[str] = Field(default_factory=list)
 
 
 class MeetingSession(BaseModel):
@@ -122,6 +139,7 @@ class MeetingSession(BaseModel):
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     transcript: list[TranscriptEntry] = Field(default_factory=list)
     frames: list[Frame] = Field(default_factory=list)
+    scenes: list[Scene] = Field(default_factory=list)
     grounded_events: list[GroundedEvent] = Field(default_factory=list)
     grounded_visual_events: list[GroundedVisualEvent] = Field(default_factory=list)
     alerts: list[Alert] = Field(default_factory=list)

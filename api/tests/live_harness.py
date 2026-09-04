@@ -1,5 +1,9 @@
 import asyncio
+import base64
+import io
 from typing import Any
+
+from PIL import Image
 
 from app.knowledge.store import store
 from app.live.events import EngineEvent
@@ -60,6 +64,16 @@ def build_manager() -> tuple[LiveSessionManager, FakeWebSocket, FakeEngine]:
     manager.engine = engine  # type: ignore[assignment]
     manager.frame_wait_seconds = 0.0
     return manager, websocket, engine
+
+
+def jpeg_bytes(shade: int = 200) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 48), (shade, shade, shade)).save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def jpeg_b64(shade: int = 200) -> str:
+    return base64.b64encode(jpeg_bytes(shade)).decode("ascii")
 
 
 async def wait_for(predicate, timeout: float = 3.0) -> None:
