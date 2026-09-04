@@ -3,6 +3,7 @@ import base64
 import binascii
 import contextlib
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,6 +56,12 @@ class ConflictJob:
 
 ProcessingJob = VerifyJob | CloseJob | ConflictJob
 
+DEICTIC = re.compile(
+    r"這個|那個|這裡|那裡|這邊|那邊|右邊|左邊|上面|下面|這塊|那塊|這張|那張|這頁|那頁"
+    r"|\b(?:this|that|here|there)\b",
+    re.IGNORECASE,
+)
+
 
 class LiveSessionManager:
     def __init__(
@@ -101,6 +108,8 @@ class LiveSessionManager:
         try:
             await self.engine.start(self.session.id)
             self._worker = asyncio.create_task(self._process_jobs())
+            if reasoner := getattr(self.engine, "reasoner", None):
+                reasoner.context_provider = self._decision_context
             await self._emit("status", {"status": "connected", "session_id": self.session.id})
             reader_task = asyncio.create_task(self.websocket.receive_json())
             event_task = asyncio.create_task(self.engine.events.get())
@@ -211,12 +220,26 @@ class LiveSessionManager:
     def _texts_between(self, start: float, end: float) -> list[str]:
         return [entry.text for entry in self.session.transcript if start <= entry.ts <= end]
 
+    def _utterance(self, utterance_id: str | None) -> TranscriptEntry | None:
+        if utterance_id:
+            for entry in reversed(self.session.transcript):
+                if entry.id == utterance_id:
+                    return entry
+        return self.session.transcript[-1] if self.session.transcript else None
+
     async def _handle_tool_call(self, event: ToolCall) -> None:
         if event.name == "create_anchor":
+            source = self._utterance(event.utterance_id)
+            # Grounding is only meaningful when someone actually pointed at something
+            # ("這個/右邊…") and there is a frame to point at; the model over-anchors otherwise.
+            needs_frame = not isinstance(self.engine, MockLiveEngine)
+            if (needs_frame and not self.session.frames) or not (
+                source and DEICTIC.search(source.text)
+            ):
+                return
             trigger = event.ts or self._elapsed()
-            latest = self.session.transcript[-1] if self.session.transcript else None
-            speaker = event.args.get("speaker") or (latest.speaker if latest else None)
-            utterance = latest.text if latest else ""
+            speaker = event.args.get("speaker") or source.speaker
+            utterance = source.text
             nearest = self._nearest_frame(trigger)
             grounded = GroundedEvent(
                 ts=trigger,
@@ -374,6 +397,18 @@ class LiveSessionManager:
         await self._try_emit("decision", decision.model_dump())
         for alert in alerts:
             await self._try_emit("alert", alert.model_dump())
+
+    def _decision_context(self) -> str:
+        lines = [
+            f"- decision[{d.status}] topic={d.topic!r} chosen={d.chosen!r}"
+            for d in self.session.decision_state.decisions
+        ]
+        lines += [
+            f"- alert[{a.kind}/{a.status}] {a.detail}"
+            for a in self.session.alerts
+            if a.status == "open"
+        ]
+        return "\n".join(lines)
 
     def _merge_decision(self, proposal: Decision) -> Decision:
         """Fold a proposal into an existing candidate on the same topic instead of

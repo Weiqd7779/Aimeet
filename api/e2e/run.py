@@ -61,7 +61,15 @@ async def run_all(filters: list[str]) -> list[tuple[RunResult, Verdict]]:
     rows: list[tuple[RunResult, Verdict]] = []
     for scenario in load_scenarios(filters):
         print(f"[{scenario.id}] {scenario.title} ...", flush=True)
-        result = await run_scenario(scenario)
+        for attempt in range(3):
+            try:
+                result = await run_scenario(scenario)
+                break
+            except RuntimeError as exc:  # e.g. API mid-reload; retry after a pause
+                if attempt == 2 or "connected" not in str(exc):
+                    raise
+                print(f"    ! {exc}; retrying in 5s", flush=True)
+                await asyncio.sleep(5)
         verdict = await grade(result)
         for name, ok, detail in verdict.checks:
             print(f"    {'PASS' if ok else 'FAIL'} {name} {detail}".rstrip())

@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     gemini_text_model: str = "gemini-2.5-flash"
     openai_model: str = "gpt-5.6-luna"
     openai_model_complex: str = "gpt-5.6-luna"
-    openai_realtime_model: str = "gpt-realtime-2.1"
+    openai_reasoning_model: str = "gpt-5.4-mini"
     openai_transcribe_model: str = "gpt-4o-mini-transcribe"
     mock_mode: bool = True
     synthesis_mock: bool = True

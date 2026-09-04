@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import contextlib
-import json
 import time
 from typing import Any
 
@@ -9,9 +8,8 @@ from openai import AsyncOpenAI
 
 from app.config import Settings, settings
 from app.live.audio import resample_pcm16
-from app.live.events import EngineEvent, EngineStatus, IntentResolved, ToolCall, Transcript
-from app.live.prompt import SYSTEM_INSTRUCTION
-from app.live.tools import openai_tools
+from app.live.events import EngineEvent, EngineStatus, IntentResolved, Transcript
+from app.live.reasoner import Reasoner
 
 SPEAKER_LABELS = {"me": "我", "remote": "與會者"}
 NOISE_REDUCTION = {"me": "near_field", "remote": "far_field"}
@@ -48,26 +46,23 @@ class _Connection:
 
 
 class OpenAIRealtimeEngine:
-    """One transcription socket per speaker channel; one reasoning socket for tools.
+    """One transcription socket per speaker channel + a stateless reasoner.
 
     Speaker channels are never mixed: each source gets its own server-side VAD and
     transcript stream, so overlapping speech stays attributed to the right person.
-    Completed utterances are forwarded (with speaker label) to the reasoning session,
-    which also receives frames and emits tool calls.
+    Completed utterances (with speaker label and speech-start timestamp) go to the
+    Reasoner, which decides per utterance whether any tool should fire.
     """
 
     def __init__(self, app_settings: Settings = settings) -> None:
         self.settings = app_settings
         self.events: asyncio.Queue[EngineEvent] = asyncio.Queue()
         self._client: AsyncOpenAI | None = None
-        self._reasoning: _Connection | None = None
+        self.reasoner: Reasoner | None = None
         self._transcribers: dict[str, _Connection] = {}
+        self._pending: set[asyncio.Task[None]] = set()
         self._started = time.monotonic()
         self._last_frame = 0.0
-        self._response_lock = asyncio.Lock()
-        self._response_done = asyncio.Event()
-        self._current_utterance: str | None = None
-        self._current_tools: list[str] = []
         self._buffer_start: dict[str, float] = {}  # source -> elapsed at first audio chunk
         self._speech_start: dict[str, float] = {}  # item_id -> elapsed at speech start
         self._closed = False
@@ -81,21 +76,8 @@ class OpenAIRealtimeEngine:
             raise RuntimeError("OPENAI_API_KEY is required for OpenAI live mode")
         self._started = time.monotonic()
         self._closed = False
-        self._response_done.set()
         self._client = AsyncOpenAI(api_key=self.settings.openai_api_key)
-
-        self._reasoning = _Connection(self._client, model=self.settings.openai_realtime_model)
-        conn = await self._reasoning.open()
-        await conn.session.update(
-            session={
-                "type": "realtime",
-                "output_modalities": ["text"],
-                "instructions": SYSTEM_INSTRUCTION,
-                "tools": openai_tools(),
-                "tool_choice": "auto",
-            }
-        )
-        self._reasoning.listener = asyncio.create_task(self._listen_reasoning(conn))
+        self.reasoner = Reasoner(self._client, self.settings.openai_reasoning_model)
 
         for source in SPEAKER_LABELS:
             transcriber = _Connection(self._client, extra_query={"intent": "transcription"})
@@ -142,7 +124,7 @@ class OpenAIRealtimeEngine:
                             text=text, ts=ts if ts is not None else self._elapsed(), speaker=speaker
                         )
                         await self.events.put(transcript)
-                        await self._forward_utterance(transcript)
+                        self._spawn_reasoning(transcript)
                 elif event_type == "error":
                     await self._fail(f"{speaker} transcription: {getattr(event, 'error', event)}")
                     return
@@ -151,77 +133,25 @@ class OpenAIRealtimeEngine:
         except Exception as exc:  # noqa: BLE001
             await self._fail(f"{speaker} transcription: {exc}")
 
-    async def _listen_reasoning(self, conn: Any) -> None:
-        try:
-            async for event in conn:
-                event_type = getattr(event, "type", "")
-                if event_type == "response.function_call_arguments.done":
-                    name = getattr(event, "name", "")
-                    self._current_tools.append(name)
-                    await self.events.put(
-                        ToolCall(
-                            name=name,
-                            args=json.loads(getattr(event, "arguments", "{}")),
-                            id=getattr(event, "call_id", None),
-                            ts=self._elapsed(),
-                            utterance_id=self._current_utterance,
-                        )
-                    )
-                    await self._reply_to_tool_call(getattr(event, "call_id", None))
-                elif event_type == "response.done":
-                    await self._finish_response()
-                elif event_type == "error":
-                    await self._finish_response()
-                    await self._fail(f"reasoning: {getattr(event, 'error', event)}")
-                    return
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            await self._fail(f"reasoning: {exc}")
+    def _spawn_reasoning(self, transcript: Transcript) -> None:
+        task = asyncio.create_task(self._reason(transcript))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    async def _reason(self, transcript: Transcript) -> None:
+        if not self.reasoner:
+            return
+        calls = await self.reasoner.process(
+            transcript.speaker or "?", transcript.text, transcript.ts
+        )
+        for call in calls:
+            call.utterance_id = transcript.id
+            await self.events.put(call)
+        await self.events.put(IntentResolved(transcript.id, [call.name for call in calls]))
 
     async def _fail(self, detail: str) -> None:
         if not self._closed:
             await self.events.put(EngineStatus("disconnected", detail))
-
-    async def _reply_to_tool_call(self, call_id: str | None) -> None:
-        if call_id and self._reasoning and self._reasoning.conn:
-            await self._reasoning.conn.conversation.item.create(
-                item={
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": '{"result":"ok"}',
-                }
-            )
-
-    async def _finish_response(self) -> None:
-        if self._current_utterance is not None or self._current_tools:
-            await self.events.put(
-                IntentResolved(self._current_utterance, list(self._current_tools))
-            )
-        self._current_utterance = None
-        self._current_tools = []
-        self._response_done.set()
-
-    async def _forward_utterance(self, transcript: Transcript) -> None:
-        await self._send_reasoning_text(f"[{transcript.speaker}] {transcript.text}", transcript.id)
-
-    async def _send_reasoning_text(self, text: str, utterance_id: str | None = None) -> None:
-        if not self._reasoning or not self._reasoning.conn:
-            return
-        async with self._response_lock:
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._response_done.wait(), timeout=15)
-            self._response_done.clear()
-            self._current_utterance = utterance_id
-            self._current_tools = []
-            await self._reasoning.conn.conversation.item.create(
-                item={
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": text}],
-                }
-            )
-            await self._reasoning.conn.response.create()
 
     async def send_audio(self, audio: bytes, source: str | None = None) -> None:
         transcriber = self._transcribers.get(source or "")
@@ -235,31 +165,25 @@ class OpenAIRealtimeEngine:
 
     async def send_frame(self, jpeg_bytes: bytes, reason: str = "manual") -> None:
         now = time.monotonic()
-        if not self._reasoning or not self._reasoning.conn:
+        if not self.reasoner:
             return
         if reason != "deictic" and now - self._last_frame < 4:
             return
         self._last_frame = now
-        image_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg_bytes).decode('ascii')}"
-        await self._reasoning.conn.conversation.item.create(
-            item={
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_image", "image_url": image_url}],
-            }
-        )
+        self.reasoner.set_frame(self._elapsed(), jpeg_bytes)
 
     async def send_text(self, text: str) -> None:
         transcript = Transcript(text=text, ts=self._elapsed(), speaker=SPEAKER_LABELS["me"])
         await self.events.put(transcript)
-        await self._forward_utterance(transcript)
+        self._spawn_reasoning(transcript)
 
     async def close(self) -> None:
         self._closed = True
-        self._response_done.set()
+        for task in list(self._pending):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         for transcriber in self._transcribers.values():
             await transcriber.close()
         self._transcribers = {}
-        if self._reasoning:
-            await self._reasoning.close()
-            self._reasoning = None
+        self.reasoner = None

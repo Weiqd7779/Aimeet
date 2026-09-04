@@ -6,6 +6,7 @@ speaker, and every server event is collected for assertion.
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import io
 import json
@@ -147,19 +148,28 @@ def render_frame(kind: str) -> bytes:
     return buffer.getvalue()
 
 
+def _audio_message(speaker: str, chunk: bytes) -> str:
+    return json.dumps(
+        {"type": "audio", "source": speaker, "pcm16_b64": base64.b64encode(chunk).decode("ascii")}
+    )
+
+
 async def _stream_audio(ws: Any, speaker: str, pcm: bytes) -> None:
     for offset in range(0, len(pcm), CHUNK_BYTES):
-        chunk = pcm[offset : offset + CHUNK_BYTES]
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "audio",
-                    "source": speaker,
-                    "pcm16_b64": base64.b64encode(chunk).decode("ascii"),
-                }
-            )
-        )
+        await ws.send(_audio_message(speaker, pcm[offset : offset + CHUNK_BYTES]))
         await asyncio.sleep(0.1)
+
+
+async def _room_tone(ws: Any, speaker: str, speaking: asyncio.Lock) -> None:
+    """Like a real microphone, keep sending silence whenever this speaker is not talking.
+    Server VAD needs the trailing silence to close a turn, and `audio_start_ms` only tracks
+    wall time if the buffer is continuous."""
+    chunk = silence(0.1)
+    with contextlib.suppress(asyncio.CancelledError, websockets.ConnectionClosed):
+        while True:
+            if not speaking.locked():
+                await ws.send(_audio_message(speaker, chunk))
+            await asyncio.sleep(0.1)
 
 
 async def _utterance_pcm(step: Step) -> bytes:
@@ -221,6 +231,10 @@ async def run_scenario(scenario: Scenario) -> RunResult:
 
             # A real person cannot talk over themselves: serialise steps per speaker channel.
             locks = {speaker: asyncio.Lock() for speaker in VOICES}
+            room_tone = [
+                asyncio.create_task(_room_tone(ws, speaker, lock))
+                for speaker, lock in locks.items()
+            ]
 
             async def scheduled(step: Step) -> None:
                 await asyncio.sleep(step.at)
@@ -233,13 +247,19 @@ async def run_scenario(scenario: Scenario) -> RunResult:
             try:
                 await asyncio.gather(*(scheduled(step) for step in scenario.steps))
                 await asyncio.sleep(scenario.settle_seconds)
+                for task in room_tone:
+                    task.cancel()
                 await ws.send(json.dumps({"type": "end"}))
-                await asyncio.sleep(0.5)
+                # wait for the server to finish (it closes the socket after persisting)
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(collector, timeout=15)
             except websockets.ConnectionClosed as exc:
                 statuses = [e["payload"] for e in result.events if e["type"] == "status"]
                 print(
                     f"    ! server closed the session early ({exc}); last status: {statuses[-1:]}"
                 )
+            for task in room_tone:
+                task.cancel()
             collector.cancel()
         record = await http.get(f"/sessions/{session_id}/record")
         if record.status_code == 200:
