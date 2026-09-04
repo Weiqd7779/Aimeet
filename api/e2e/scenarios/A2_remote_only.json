@@ -1,0 +1,14 @@
+{
+  "id": "A2",
+  "title": "只有與會者講話：所有逐字稿都標為「與會者」",
+  "steps": [
+    { "at": 0.0, "speaker": "remote", "say": "我這邊補充一下，訪談裡有五位使用者提到握感的問題。" },
+    { "at": 5.5, "speaker": "remote", "say": "他們覺得目前的外殼太滑，希望加上防滑材質。" }
+  ],
+  "settle_seconds": 6,
+  "expect": {
+    "speakers_only": ["與會者"],
+    "min_transcripts_per_speaker": { "與會者": 1 },
+    "judge": "逐字稿內容應忠實對應腳本的兩句話（允許標點與少量用字差異）。"
+  }
+}

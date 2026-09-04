@@ -1,0 +1,40 @@
+{
+  "id": "D2",
+  "title": "十句混合對話：紀錄完整、歸屬正確、報告資訊不漏",
+  "synthesize": true,
+  "steps": [
+    { "at": 0.0, "frame": "chart" },
+    { "at": 1.0, "speaker": "me", "say": "今天要決定 Q4 的原型方向，先看一下成本和滿意度。" },
+    { "at": 6.5, "speaker": "remote", "say": "右邊這塊圖表顯示 Prototype B 的滿意度最高，測試者有八成給正面評價。" },
+    { "at": 13.0, "speaker": "me", "say": "但是 B 的成本是一千零二十元，超過我們八百五十的上限。" },
+    { "at": 19.5, "speaker": "remote", "say": "如果把外殼改成矽膠包覆，成本可以壓到大概九百二十元。" },
+    { "at": 26.0, "speaker": "me", "say": "還是超過。那 Prototype C 呢？它是八百三十元。" },
+    { "at": 31.5, "speaker": "remote", "say": "Prototype C 的滿意度中等，握感的問題還沒解，供應商說兩週內可以交樣品。" },
+    { "at": 38.5, "speaker": "me", "say": "好，那我們決定 Q4 先採用 Prototype C。Prototype B 留做下一季的候選。" },
+    { "at": 45.0, "speaker": "remote", "say": "我會在下週三前把 C 的樣品測試計畫發給大家，負責人是小林。" },
+    { "at": 51.5, "speaker": "me", "say": "另外請把握感問題開一張 issue 追蹤，優先度設高。" },
+    { "at": 57.0, "speaker": "remote", "say": "沒問題，我今天就開。" }
+  ],
+  "settle_seconds": 14,
+  "expect": {
+    "speaker_order": ["我", "與會者", "我", "與會者", "我", "與會者", "我", "與會者", "我", "與會者"],
+    "min_transcripts_per_speaker": { "我": 5, "與會者": 5 },
+    "no_simplified": true,
+    "record_integrity": true,
+    "decision_chosen_contains_any": ["Prototype C", "C"],
+    "report_facts_contain_all": [
+      ["1,020", "1020", "一千零二十"],
+      ["850", "八百五十"],
+      ["920", "九百二十"],
+      ["830", "八百三十"],
+      ["八成", "80%", "80 %"],
+      ["兩週", "兩周", "2 週", "2週"],
+      ["下週三", "下周三"],
+      "小林",
+      "矽膠",
+      "握感"
+    ],
+    "report_max_seconds": 150,
+    "judge": "檢查報告：(1) key_facts 必須涵蓋所有數字（1020、850、920、830、八成）、時程（兩週、下週三）、人名（小林）、待辦（測試計畫、握感 issue 高優先），且 speaker 標示與腳本一致；(2) decision_table 有採用 Prototype C、B 為下一季候選；(3) 沒有把腳本、分享畫面、知識庫都沒有的內容寫成事實。數字寫法（1,020 / 1020 / 一千零二十）視為相同；語音辨識同音錯字不算捏造。"
+  }
+}

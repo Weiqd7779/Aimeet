@@ -1,0 +1,16 @@
+{
+  "id": "D1",
+  "title": "會後報告：決策表包含會中決策、引用帶正確 speaker",
+  "synthesize": true,
+  "steps": [
+    { "at": 0.0, "frame": "chart" },
+    { "at": 1.0, "speaker": "remote", "say": "右邊這塊圖表顯示 B 的滿意度最高。" },
+    { "at": 6.5, "speaker": "me", "say": "好，那我們決定採用方案B，下週開始實作。" }
+  ],
+  "settle_seconds": 10,
+  "expect": {
+    "report_decision_contains_any": ["方案B", "方案 B", "B"],
+    "report_max_seconds": 90,
+    "judge": "報告 summary 或 decision_table 必須反映「採用方案B」這個決策，且若提到發言來源，應把提出決策的人標為「我」、提到圖表的人標為「與會者」，不得對調。"
+  }
+}

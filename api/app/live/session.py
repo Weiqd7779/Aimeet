@@ -5,12 +5,13 @@ import contextlib
 from typing import Any
 
 from fastapi import WebSocket
+from rapidfuzz import fuzz
 from starlette.websockets import WebSocketDisconnect
 
 from app.config import settings
 from app.conflict import check_conflict
 from app.knowledge.store import KnowledgeStore
-from app.live.events import EngineStatus, ToolCall, Transcript
+from app.live.events import EngineStatus, IntentResolved, ToolCall, Transcript
 from app.live.gemini import GeminiLiveEngine
 from app.live.mock import MockLiveEngine
 from app.live.openai_rt import OpenAIRealtimeEngine
@@ -23,6 +24,7 @@ from app.models import (
     ServerEvent,
     TranscriptEntry,
 )
+from app.record.store import Recorder
 
 
 class LiveSessionManager:
@@ -41,6 +43,7 @@ class LiveSessionManager:
             self.engine = GeminiLiveEngine()
         else:
             self.engine = MockLiveEngine()
+        self.recorder = Recorder(session, settings.record_dir)
         self._started = asyncio.get_running_loop().time()
 
     def _elapsed(self) -> float:
@@ -84,6 +87,7 @@ class LiveSessionManager:
                     with contextlib.suppress(asyncio.CancelledError):
                         await task
             await self.engine.close()
+            self.recorder.close()
             with contextlib.suppress(RuntimeError, WebSocketDisconnect):
                 await self.websocket.close()
 
@@ -91,7 +95,10 @@ class LiveSessionManager:
         message_type = message.get("type")
         try:
             if message_type == "audio":
-                await self.engine.send_audio(base64.b64decode(message["pcm16_b64"], validate=True))
+                await self.engine.send_audio(
+                    base64.b64decode(message["pcm16_b64"], validate=True),
+                    source=message.get("source"),
+                )
             elif message_type == "frame":
                 jpeg_bytes = base64.b64decode(message["jpeg_b64"], validate=True)
                 frame = Frame(
@@ -122,11 +129,21 @@ class LiveSessionManager:
 
     async def _handle_engine_event(self, event: Any) -> bool:
         if isinstance(event, Transcript):
-            transcript = TranscriptEntry(ts=event.ts, speaker=event.speaker, text=event.text)
+            transcript = TranscriptEntry(
+                id=event.id, ts=event.ts, speaker=event.speaker, text=event.text
+            )
             self.session.transcript.append(transcript)
+            self.recorder.add_utterance(
+                id=transcript.id, ts=transcript.ts, speaker=transcript.speaker, text=transcript.text
+            )
             await self._emit("transcript", transcript.model_dump())
         elif isinstance(event, ToolCall):
             await self._handle_tool_call(event)
+        elif isinstance(event, IntentResolved):
+            self.recorder.resolve(event.utterance_id, event.tools)
+            await self._emit(
+                "utterance_resolved", {"utterance_id": event.utterance_id, "tools": event.tools}
+            )
         elif isinstance(event, EngineStatus):
             await self._emit("status", {"status": event.status, "detail": event.detail})
             return event.status in {"script_complete", "disconnected"}
@@ -145,9 +162,10 @@ class LiveSessionManager:
                 confidence=float(event.args.get("confidence", 0.0)),
             )
             self.session.grounded_events.append(grounded)
+            self.recorder.link(event.utterance_id, event.name, grounded.id)
             await self._emit("grounded_event", grounded.model_dump())
         elif event.name == "propose_decision":
-            decision = Decision(
+            proposal = Decision(
                 ts=event.ts or self._elapsed(),
                 topic=str(event.args.get("topic", "")),
                 chosen=str(event.args.get("chosen", "")),
@@ -156,7 +174,7 @@ class LiveSessionManager:
                 reasons_against=list(event.args.get("reasons_against", [])),
                 constraints=list(event.args.get("constraints", [])),
             )
-            self.session.decision_state.decisions.append(decision)
+            decision = self._merge_decision(proposal)
             options = self.session.decision_state.options_under_comparison
             for option in [decision.chosen, *decision.alternatives]:
                 if option not in options:
@@ -168,6 +186,9 @@ class LiveSessionManager:
             alerts = await check_conflict(decision, hits)
             decision.conflicts.extend(alert.id for alert in alerts)
             self.session.alerts.extend(alerts)
+            self.recorder.link(event.utterance_id, event.name, decision.id)
+            for alert in alerts:
+                self.recorder.link(event.utterance_id, "notify_speaker", alert.id)
             await self._emit("decision", decision.model_dump())
             for alert in alerts:
                 await self._emit("alert", alert.model_dump())
@@ -182,8 +203,10 @@ class LiveSessionManager:
                 detail=str(event.args.get("message", "")),
             )
             self.session.alerts.append(alert)
+            self.recorder.link(event.utterance_id, event.name, alert.id)
             await self._emit("alert", alert.model_dump())
         elif event.name == "capture_context":
+            self.recorder.link(event.utterance_id, event.name, "")
             await self._emit(
                 "status",
                 {
@@ -192,6 +215,26 @@ class LiveSessionManager:
                     "reason": event.args.get("reason"),
                 },
             )
+
+    def _merge_decision(self, proposal: Decision) -> Decision:
+        """Fold a proposal into an existing candidate on the same topic instead of
+        stacking near-duplicates; the latest wording wins, lists are unioned."""
+        for existing in self.session.decision_state.decisions:
+            if existing.status != "candidate":
+                continue
+            same_topic = fuzz.token_set_ratio(existing.topic, proposal.topic) >= 70
+            same_choice = fuzz.partial_ratio(existing.chosen, proposal.chosen) >= 70
+            if same_topic or same_choice:
+                existing.chosen = proposal.chosen
+                existing.ts = proposal.ts
+                for field in ("alternatives", "reasons_for", "reasons_against", "constraints"):
+                    merged = getattr(existing, field)
+                    merged.extend(item for item in getattr(proposal, field) if item not in merged)
+                if existing.chosen in existing.alternatives:
+                    existing.alternatives.remove(existing.chosen)
+                return existing
+        self.session.decision_state.decisions.append(proposal)
+        return proposal
 
     def _update_decision(self, decision_id: str, status: str) -> Decision:
         if status not in {"candidate", "confirmed", "rejected"}:

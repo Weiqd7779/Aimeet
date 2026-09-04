@@ -1,5 +1,6 @@
 import base64
 import binascii
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
@@ -63,6 +64,32 @@ async def get_frame(session_id: str, frame_id: str) -> Response:
     except (binascii.Error, ValueError) as exc:
         raise HTTPException(status_code=422, detail="Invalid frame data") from exc
     return Response(content=data, media_type="image/jpeg")
+
+
+def _record_path(session_id: str, name: str) -> Path:
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    path = Path(settings.record_dir) / session_id / name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Record not written yet")
+    return path
+
+
+@router.get("/sessions/{session_id}/record")
+async def get_record(session_id: str) -> Response:
+    """Fixed-schema meeting record (aimeet.record.v1) as persisted on disk."""
+    return Response(
+        content=_record_path(session_id, "record.json").read_bytes(),
+        media_type="application/json",
+    )
+
+
+@router.get("/sessions/{session_id}/record.md")
+async def get_record_markdown(session_id: str) -> Response:
+    return Response(
+        content=_record_path(session_id, "record.md").read_bytes(),
+        media_type="text/markdown; charset=utf-8",
+    )
 
 
 @router.get("/knowledge")

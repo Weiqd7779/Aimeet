@@ -1,0 +1,44 @@
+{
+  "vocabulary": [
+    "pull request", "deploy", "production", "API", "latency", "Redis", "cache", "Kubernetes",
+    "pod", "OOM", "rollback", "staging", "CI", "pipeline", "unit test", "flaky", "PR", "merge",
+    "hotfix", "feature flag", "Postgres", "index", "query", "p99", "Prometheus", "Grafana",
+    "dashboard", "webhook", "retry", "timeout", "rate limit", "OAuth", "token", "refresh token",
+    "schema", "migration", "Docker", "image", "tag", "Sentry", "Prototype A", "Prototype B",
+    "Prototype C", "BOM", "Q4", "sprint", "backlog", "roadmap", "UX", "Figma", "MVP", "SLA"
+  ],
+  "items": [
+    { "id": "zh01", "category": "純中文", "speaker": "USER", "text": "今天的會議先確認上週的待辦有沒有完成，再討論下一步。", "terms": [] },
+    { "id": "zh02", "category": "純中文", "speaker": "REMOTE", "text": "供應商說樣品最快兩週內可以交，成本大概每台多五十塊。", "terms": [] },
+    { "id": "zh03", "category": "純中文", "speaker": "USER", "text": "這個方向我沒有意見，但時程要再往後推一週比較保險。", "terms": [] },
+    { "id": "zh04", "category": "純中文", "speaker": "REMOTE", "text": "使用者訪談裡有五位提到握感的問題，希望外殼改成防滑材質。", "terms": [] },
+
+    { "id": "mx01", "category": "中文夾英文", "speaker": "USER", "text": "這個 pull request 昨天 deploy 到 production 之後，API latency 變高很多。", "terms": ["pull request", "deploy", "production", "API", "latency"] },
+    { "id": "mx02", "category": "中文夾英文", "speaker": "REMOTE", "text": "我們先把 Redis 當 cache layer，下週在 staging 環境驗證。", "terms": ["Redis", "cache", "staging"] },
+    { "id": "mx03", "category": "中文夾英文", "speaker": "USER", "text": "那個 flaky 的 unit test 先 skip 掉，不要卡住整條 CI pipeline。", "terms": ["flaky", "unit test", "CI", "pipeline"] },
+    { "id": "mx04", "category": "中文夾英文", "speaker": "REMOTE", "text": "如果 hotfix 今天 merge，feature flag 記得先關掉。", "terms": ["hotfix", "merge", "feature flag"] },
+    { "id": "mx05", "category": "中文夾英文", "speaker": "USER", "text": "Postgres 那張表沒有 index，query 跑到 p99 三秒。", "terms": ["Postgres", "index", "query", "p99"] },
+    { "id": "mx06", "category": "中文夾英文", "speaker": "REMOTE", "text": "Grafana dashboard 上看得到 Prometheus 的 alert，但 Sentry 沒有收到錯誤。", "terms": ["Grafana", "dashboard", "Prometheus", "Sentry"] },
+
+    { "id": "tech01", "category": "工程專有名詞", "speaker": "USER", "text": "Kubernetes 的 pod 一直 OOM，先 rollback 到上一個 image tag。", "terms": ["Kubernetes", "pod", "OOM", "rollback", "image", "tag"] },
+    { "id": "tech02", "category": "工程專有名詞", "speaker": "REMOTE", "text": "webhook 要加 retry 跟 timeout，不然遇到 rate limit 就整批失敗。", "terms": ["webhook", "retry", "timeout", "rate limit"] },
+    { "id": "tech03", "category": "工程專有名詞", "speaker": "USER", "text": "OAuth 的 refresh token 過期後要重新換 token，schema migration 也要一起上。", "terms": ["OAuth", "refresh token", "token", "schema", "migration"] },
+    { "id": "tech04", "category": "工程專有名詞", "speaker": "REMOTE", "text": "Docker image 要重新 build，順便把 Sentry 的 DSN 換成新的。", "terms": ["Docker", "image", "Sentry"] },
+
+    { "id": "fast01", "category": "快速說話", "speaker": "USER", "text": "好好好那就這樣定，PR 你先開，我下午 review 完就 merge，晚上 deploy。", "terms": ["PR", "merge", "deploy"], "speed": 1.3 },
+    { "id": "fast02", "category": "快速說話", "speaker": "REMOTE", "text": "等一下等一下，staging 還沒過，你先不要動 production 的 feature flag。", "terms": ["staging", "production", "feature flag"], "speed": 1.3 },
+    { "id": "fast03", "category": "快速說話", "speaker": "USER", "text": "Prototype B 一千零二十、Prototype C 八百三十，上限八百五十，所以只有 C 過。", "terms": ["Prototype B", "Prototype C"], "speed": 1.25 },
+
+    { "id": "short01", "category": "短句", "speaker": "REMOTE", "text": "沒問題。", "terms": [] },
+    { "id": "short02", "category": "短句", "speaker": "USER", "text": "先 rollback。", "terms": ["rollback"] },
+    { "id": "short03", "category": "短句", "speaker": "REMOTE", "text": "OK，我今天開 PR。", "terms": ["PR"] },
+    { "id": "short04", "category": "短句", "speaker": "USER", "text": "Q4 就用 Prototype C。", "terms": ["Q4", "Prototype C"] },
+
+    { "id": "long01", "category": "長句", "speaker": "REMOTE", "text": "我們這個 sprint 的 backlog 還有十二張票，其中三張是 UX 要改 Figma 的稿，剩下的是 API 端的 schema migration 跟 webhook retry，照 roadmap 來看 MVP 應該可以在月底前交出去。", "terms": ["sprint", "backlog", "UX", "Figma", "API", "schema", "migration", "webhook", "retry", "roadmap", "MVP"] },
+    { "id": "long02", "category": "長句", "speaker": "USER", "text": "昨天晚上 production 的 Kubernetes cluster 有兩個 pod 因為記憶體不足被 OOM kill，我們先 rollback 到前一版 image，同時在 Grafana 上把 p99 latency 的 alert 門檻從三秒調成兩秒，這樣 SLA 才守得住。", "terms": ["production", "Kubernetes", "pod", "OOM", "rollback", "image", "Grafana", "p99", "latency", "SLA"] },
+    { "id": "long03", "category": "長句", "speaker": "REMOTE", "text": "關於 Q4 的原型選擇，Prototype B 的使用者滿意度最高但 BOM 成本一千零二十超過八百五十的上限，Prototype C 八百三十在預算內但握感問題還沒解，所以我建議先採用 C，B 留做下一季候選。", "terms": ["Q4", "Prototype B", "BOM", "Prototype C"] },
+
+    { "id": "num01", "category": "數字與時程", "speaker": "USER", "text": "下週三前把測試計畫發出來，負責人是小林，優先度設高。", "terms": [] },
+    { "id": "num02", "category": "數字與時程", "speaker": "REMOTE", "text": "API 的 timeout 從三十秒改成十五秒，retry 最多三次，間隔兩百毫秒。", "terms": ["API", "timeout", "retry"] }
+  ]
+}

@@ -4,6 +4,7 @@ export type DecisionStatus = "candidate" | "confirmed" | "rejected";
 export type FrameReason = "deictic" | "diff" | "periodic" | "manual";
 
 export interface TranscriptEntry {
+  id: string;
   ts: number;
   speaker: string | null;
   text: string;
@@ -73,6 +74,7 @@ export type ServerEventType =
   | "alert"
   | "decision"
   | "frame_ack"
+  | "utterance_resolved"
   | "status"
   | "error";
 
@@ -82,7 +84,7 @@ export interface ServerEvent {
 }
 
 export type ClientMessage =
-  | { type: "audio"; pcm16_b64: string }
+  | { type: "audio"; pcm16_b64: string; source: "me" | "remote" }
   | { type: "frame"; jpeg_b64: string; ts: number; reason: FrameReason }
   | { type: "text"; text: string }
   | { type: "confirm_decision"; id: string; status: DecisionStatus }
@@ -111,8 +113,17 @@ export interface WorkItem {
   kind: "github_issue" | "jira_task";
 }
 
+export interface KeyFact {
+  fact: string;
+  quote: string;
+  speaker: string | null;
+  ts: number | null;
+  category: "number" | "date" | "person" | "constraint" | "requirement" | "action" | "other";
+}
+
 export interface MeetingReport {
   summary: string;
+  key_facts: KeyFact[];
   decision_table: DecisionRow[];
   mermaid: string;
   mermaid_caption: string;

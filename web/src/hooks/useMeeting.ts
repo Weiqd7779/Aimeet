@@ -111,6 +111,7 @@ export function useMeeting() {
   const audioCleanupRef = useRef<(() => void) | null>(null);
   const samplerRef = useRef<FrameSampler | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const micRef = useRef<MediaStream | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -133,6 +134,8 @@ export function useMeeting() {
     audioCleanupRef.current = null;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    micRef.current?.getTracks().forEach((track) => track.stop());
+    micRef.current = null;
   }, []);
 
   const handleEvent = useCallback((event: ServerEvent) => {
@@ -178,9 +181,19 @@ export function useMeeting() {
           send({ type: "frame", jpeg_b64, reason, ts: performance.now() / 1000 }),
         );
         samplerRef.current.start();
-        if (stream.getAudioTracks().length) {
-          audioCleanupRef.current = await createAudioPipeline(stream, (pcm16_b64) =>
-            send({ type: "audio", pcm16_b64 }),
+        let mic: MediaStream | null = null;
+        try {
+          mic = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+          micRef.current = mic;
+        } catch {
+          showToast("無法取得麥克風，僅擷取會議分頁音訊");
+        }
+        if (!stream.getAudioTracks().length) showToast("未分享分頁音訊，將聽不到與會者");
+        if (mic || stream.getAudioTracks().length) {
+          audioCleanupRef.current = await createAudioPipeline({ mic, tab: stream }, (chunk) =>
+            send({ type: "audio", ...chunk }),
           );
         }
       }

@@ -1,13 +1,39 @@
+"""Post-meeting synthesis as a small pipeline; each model call has exactly one job.
+
+1. extract   record JSON (+frames) -> facts / decisions / questions / uncertainties
+2. coverage  utterances vs key_facts -> anything the extraction missed, merged back in
+3. derive    extraction -> mermaid | prd | work items   (parallel, no raw transcript)
+"""
+
+import asyncio
 import json
+from typing import TypeVar
 
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 
 from app.config import settings
 from app.knowledge.store import KnowledgeStore
 from app.models import MeetingSession
 from app.synthesis.mock import build_mock_report
-from app.synthesis.prompt import INSTRUCTIONS
-from app.synthesis.schemas import MeetingReport
+from app.synthesis.prompt import (
+    COVERAGE_INSTRUCTIONS,
+    DIAGRAM_INSTRUCTIONS,
+    EXTRACT_INSTRUCTIONS,
+    PRD_INSTRUCTIONS,
+    WORK_ITEMS_INSTRUCTIONS,
+)
+from app.synthesis.record import build_record
+from app.synthesis.schemas import (
+    Coverage,
+    Diagram,
+    Extraction,
+    MeetingReport,
+    Prd,
+    WorkItems,
+)
+
+T = TypeVar("T", bound=BaseModel)
 
 
 def _frame_ids(session: MeetingSession) -> list[str]:
@@ -21,36 +47,26 @@ def _frame_ids(session: MeetingSession) -> list[str]:
     return ordered[:6]
 
 
-def _input_text(session: MeetingSession, knowledge: KnowledgeStore) -> str:
-    alert_sources = {alert.source for alert in session.alerts if alert.source}
-    source_chunks = [
-        chunk for chunk in getattr(knowledge, "_chunks", []) if chunk.source in alert_sources
-    ]
-    return "\n".join(
-        [
-            "逐字稿：",
-            json.dumps([entry.model_dump() for entry in session.transcript], ensure_ascii=False),
-            "Grounded events：",
-            json.dumps(
-                [event.model_dump() for event in session.grounded_events], ensure_ascii=False
-            ),
-            "決策：",
-            json.dumps(
-                [decision.model_dump() for decision in session.decision_state.decisions],
-                ensure_ascii=False,
-            ),
-            "提醒與衝突處理：",
-            json.dumps([alert.model_dump() for alert in session.alerts], ensure_ascii=False),
-            "知識庫來源：",
-            json.dumps(
-                [
-                    {"source": chunk.source, "id": chunk.id, "text": chunk.text}
-                    for chunk in source_chunks
-                ],
-                ensure_ascii=False,
-            ),
-        ]
+def _dumps(payload: object) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=1)
+
+
+async def _call(
+    client: AsyncOpenAI,
+    model: str,
+    instructions: str,
+    content: list[dict[str, str]],
+    schema: type[T],
+) -> T:
+    response = await client.responses.parse(
+        model=model,
+        instructions=instructions,
+        input=[{"role": "user", "content": content}],
+        text_format=schema,
     )
+    if response.output_parsed is None:
+        raise ValueError(f"OpenAI returned no parsed {schema.__name__}")
+    return response.output_parsed
 
 
 async def synthesize(
@@ -68,13 +84,16 @@ async def synthesize(
     if settings.synthesis_mock or not settings.openai_api_key:
         return build_mock_report(session)
 
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    record = build_record(session, knowledge)
+
+    # 1. extract
     content: list[dict[str, str]] = [
-        {"type": "input_text", "text": _input_text(session, knowledge)}
+        {"type": "input_text", "text": "會議紀錄：\n" + _dumps(record)}
     ]
     frames = {frame.id: frame for frame in session.frames}
     for frame_id in _frame_ids(session):
-        frame = frames.get(frame_id)
-        if frame:
+        if frame := frames.get(frame_id):
             content.append(
                 {
                     "type": "input_image",
@@ -82,13 +101,51 @@ async def synthesize(
                     "detail": "low",
                 }
             )
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
-    response = await client.responses.parse(
-        model=selected_model,
-        instructions=INSTRUCTIONS,
-        input=[{"role": "user", "content": content}],
-        text_format=MeetingReport,
+    extraction = await _call(client, selected_model, EXTRACT_INSTRUCTIONS, content, Extraction)
+
+    # 2. coverage check -> merge anything missed
+    utterances = [item for item in record["timeline"] if item["type"] == "utterance"]
+    coverage = await _call(
+        client,
+        selected_model,
+        COVERAGE_INSTRUCTIONS,
+        [
+            {
+                "type": "input_text",
+                "text": "utterances：\n"
+                + _dumps(utterances)
+                + "\n\nkey_facts：\n"
+                + _dumps([fact.model_dump() for fact in extraction.key_facts]),
+            }
+        ],
+        Coverage,
     )
-    if response.output_parsed is None:
-        raise ValueError("OpenAI returned no parsed MeetingReport")
-    return response.output_parsed
+    key_facts = extraction.key_facts + coverage.missing
+
+    # 3. derive artifacts from the extraction only
+    basis = [
+        {
+            "type": "input_text",
+            "text": "決策表：\n"
+            + _dumps([row.model_dump() for row in extraction.decision_table])
+            + "\n\n關鍵事實：\n"
+            + _dumps([fact.model_dump() for fact in key_facts]),
+        }
+    ]
+    diagram, prd, work_items = await asyncio.gather(
+        _call(client, selected_model, DIAGRAM_INSTRUCTIONS, basis, Diagram),
+        _call(client, selected_model, PRD_INSTRUCTIONS, basis, Prd),
+        _call(client, selected_model, WORK_ITEMS_INSTRUCTIONS, basis, WorkItems),
+    )
+
+    return MeetingReport(
+        summary=extraction.summary,
+        key_facts=key_facts,
+        decision_table=extraction.decision_table,
+        mermaid=diagram.mermaid,
+        mermaid_caption=diagram.mermaid_caption,
+        prd_markdown=prd.prd_markdown,
+        work_items=work_items.work_items,
+        open_questions=extraction.open_questions,
+        uncertainties=extraction.uncertainties,
+    )

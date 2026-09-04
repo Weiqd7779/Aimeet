@@ -1,0 +1,18 @@
+{
+  "id": "A7",
+  "title": "一句話中間自然停頓：不會被切成碎片",
+  "steps": [
+    {
+      "at": 0.0,
+      "speaker": "me",
+      "say": ["我們決定採用方案B，", "下週開始實作。"]
+    }
+  ],
+  "settle_seconds": 7,
+  "expect": {
+    "speakers_only": ["我"],
+    "min_transcripts_per_speaker": { "我": 1 },
+    "max_transcripts_per_speaker": { "我": 1 },
+    "judge": "逐字稿應為一行且完整包含「方案B」與「下週開始實作」兩部分。"
+  }
+}

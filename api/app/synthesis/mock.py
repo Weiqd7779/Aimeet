@@ -1,5 +1,5 @@
 from app.models import MeetingSession
-from app.synthesis.schemas import DecisionRow, MeetingReport, WorkItem
+from app.synthesis.schemas import DecisionRow, KeyFact, MeetingReport, WorkItem
 
 
 def _decision_row(session: MeetingSession, decision_id: str) -> DecisionRow:
@@ -67,8 +67,19 @@ def build_mock_report(session: MeetingSession) -> MeetingReport:
         )
         for decision in session.decision_state.decisions
     ]
+    key_facts = [
+        KeyFact(
+            fact=f"{decision.topic}：{decision.chosen}",
+            quote=decision.chosen,
+            speaker=None,
+            ts=decision.ts,
+            category="other",
+        )
+        for decision in session.decision_state.decisions
+    ]
     return MeetingReport(
         summary=f"本次會議整理出 {len(rows)} 項決策，並保留其 grounding 與衝突脈絡。",
+        key_facts=key_facts,
         decision_table=rows,
         mermaid=mermaid,
         mermaid_caption=caption,

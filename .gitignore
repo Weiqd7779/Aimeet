@@ -22,3 +22,9 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+
+api/e2e/.cache/
+api/e2e/results/
+api/data/
+api/bench/.cache/
+api/bench/results/

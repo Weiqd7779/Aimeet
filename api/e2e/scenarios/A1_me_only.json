@@ -1,0 +1,15 @@
+{
+  "id": "A1",
+  "title": "只有我講話：所有逐字稿都標為「我」",
+  "steps": [
+    { "at": 0.0, "speaker": "me", "say": "今天的議程有三項，先看上週的使用者訪談結果。" },
+    { "at": 5.0, "speaker": "me", "say": "然後我們再討論下一版原型要怎麼調整。" }
+  ],
+  "settle_seconds": 6,
+  "expect": {
+    "speakers_only": ["我"],
+    "min_transcripts_per_speaker": { "我": 1 },
+    "max_decisions": 0,
+    "judge": "逐字稿內容應忠實對應腳本的兩句話（允許標點與少量用字差異），不得出現與腳本無關的句子。"
+  }
+}

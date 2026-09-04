@@ -1,0 +1,13 @@
+{
+  "id": "A6",
+  "title": "中文夾雜技術詞：逐字稿必須是繁體，不得出現簡體字",
+  "steps": [
+    { "at": 0.0, "speaker": "remote", "say": "這個 API 的回應時間太長，資料庫查詢應該加快取。" },
+    { "at": 5.5, "speaker": "me", "say": "我們用 Redis 當 cache layer，下週先在測試環境驗證。" }
+  ],
+  "settle_seconds": 6,
+  "expect": {
+    "no_simplified": true,
+    "min_transcripts_per_speaker": { "我": 1, "與會者": 1 }
+  }
+}

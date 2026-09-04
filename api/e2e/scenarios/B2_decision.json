@@ -1,0 +1,13 @@
+{
+  "id": "B2",
+  "title": "說「我們決定採用方案B」：出現候選決策",
+  "steps": [
+    { "at": 0.0, "speaker": "remote", "say": "方案A和方案B比起來，B 的使用者回饋比較好。" },
+    { "at": 5.5, "speaker": "me", "say": "好，那我們決定採用方案B，下週開始實作。" }
+  ],
+  "settle_seconds": 10,
+  "expect": {
+    "decision_chosen_contains_any": ["方案B", "方案 B", "B"],
+    "judge": "必須至少有一個 decision，其 chosen 是方案B；alternatives 若有列出應包含方案A。不應出現與腳本無關的決策。"
+  }
+}

@@ -10,12 +10,13 @@ class Settings(BaseSettings):
     gemini_live_model: str = "gemini-3.1-flash-live-preview"
     gemini_text_model: str = "gemini-2.5-flash"
     openai_model: str = "gpt-5.6-luna"
-    openai_model_complex: str = "gpt-5.6-terra"
+    openai_model_complex: str = "gpt-5.6-luna"
     openai_realtime_model: str = "gpt-realtime-2.1"
     openai_transcribe_model: str = "gpt-4o-mini-transcribe"
     mock_mode: bool = True
     synthesis_mock: bool = True
     live_provider: Literal["gemini", "openai", "mock"] = "mock"
+    record_dir: str = "data/sessions"
 
     model_config = SettingsConfigDict(
         env_file=".env",
