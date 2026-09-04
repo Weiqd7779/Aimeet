@@ -14,11 +14,22 @@ frames, then prepares traceable structured outputs.
 | 即時 STT（候選） | Google | `gemini-3.5-transcribe-live` | 2026-08-26 GA。**專用**低延遲 STT，走 Live API WebSocket，`response_modalities=["TEXT"]`；回 `interim_input_transcription`（partial）與 `input_transcription`（final）。支援 `custom_vocabulary`（≤1,000 詞）、Automatic / Hybrid（client 送 `audio_stream_end`）/ Manual VAD。獨立計費 ≈ $0.009/min。**不是**舊的「開一條 gemini-*-flash-live 對話 session 順便轉錄」。 |
 | 即時 STT（候選） | OpenAI | `gpt-live-transcribe` | 專用低延遲 STT，只能用在 `type: "transcription"` session。回 `…input_audio_transcription.delta` / `.completed`。支援 `prompt`、`keywords`、`languages`（含 `zh-tw`）、`delay`（minimal/low/medium/high/xhigh）。$0.017/min。不回 timestamps / speaker / confidence。 |
 | 即時 STT（現行基準） | OpenAI | `gpt-4o-mini-transcribe` | 亦走 transcription session；已通過 e2e 14 個情境。 |
-| 會中推理（工具呼叫） | OpenAI | `gpt-realtime-2.1` → 規劃改為 Responses API（`gpt-5.4-mini` 預設，可切 luna） | 推理層只收帶說話者標籤的文字 + 截圖，不再需要 Realtime 的音訊能力。 |
+| 會中推理（工具呼叫） | OpenAI | `gpt-realtime-2.1`（進行中：改為 Responses API，`gpt-5.4-mini` 預設、可切 luna） | 推理層只收帶說話者標籤的文字 + 截圖，不再需要 Realtime 的音訊能力。 |
 | 會後整理 | OpenAI | `gpt-5.6-luna` | 三階段：extract → coverage → derive。 |
 | 合成測試語音 | OpenAI | `gpt-4o-mini-tts` | e2e / bench 用。 |
 
-STT A/B 結果見 `api/bench/results/`（跑法見下）。選型結論會更新在這一節。
+### STT A/B 結論（2026-09-04，26 句 × 3 輪 × 3 家，完整報告：`docs/stt-ab-2026-09-04.md`）
+
+| Provider | CER | 術語 recall | 繁體率 | Partial p50 | Final p50 | $/min |
+|---|---|---|---|---|---|---|
+| gemini-3.5-transcribe-live | 2.4% | 100% | 27% | 0.86s | 1.34s | 0.009 |
+| gpt-live-transcribe | 3.4% | 99% | 32% | 1.30s | 0.84s（client commit） | 0.017 |
+| **gpt-4o-mini-transcribe（預設）** | **1.5%** | 100% | **100%** | 3.05s | 1.22s | **0.003** |
+
+**POC 預設維持 `gpt-4o-mini-transcribe`**：CER 最低、數字/時程零漏、唯一原生繁體、最便宜、不需額外 VAD。
+- Gemini 會漏數字（「三十秒改成十五秒」→「調整成 15 秒」，三輪皆然）、輸出簡體、session 上限 10 分鐘；partial 最快，若日後要做即時字幕可切換並加 `opencc s2t`。
+- gpt-live-transcribe 有英文幻聽（「OAuth 的」→「Oh, after」）、指定 `zh-tw` 仍多簡體、不支援 server VAD（需自己 commit 句尾）。
+- 語料為 TTS 合成；真人口音尚未驗證。
 
 ## 架構
 
