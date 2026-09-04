@@ -37,7 +37,7 @@ class FakeEngine:
     def __init__(self) -> None:
         self.events: asyncio.Queue[EngineEvent] = asyncio.Queue()
         self.audio: list[tuple[bytes, str | None]] = []
-        self.frames: list[tuple[bytes, str]] = []
+        self.frames: list[tuple[bytes, str | None]] = []
         self.texts: list[str] = []
 
     async def start(self, session_id: str) -> None:
@@ -46,8 +46,11 @@ class FakeEngine:
     async def send_audio(self, audio: bytes, source: str | None = None) -> None:
         self.audio.append((audio, source))
 
-    async def send_frame(self, jpeg_bytes: bytes, reason: str = "manual") -> None:
-        self.frames.append((jpeg_bytes, reason))
+    async def send_frame(
+        self, jpeg_bytes: bytes, frame_id: str | None = None, ts: float | None = None
+    ) -> None:
+        del ts
+        self.frames.append((jpeg_bytes, frame_id))
 
     async def send_text(self, text: str) -> None:
         self.texts.append(text)

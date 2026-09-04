@@ -18,8 +18,14 @@ export class FrameSampler {
     this.diffCanvas.height = 36;
   }
 
+  // Capture is cheap and decoupled from reasoning: every frame is stamped and stored on the
+  // server, and the reasoner later picks the frames that fall inside an utterance's time
+  // span. So we send on a fixed cadence (plus an extra shot on pointing words) rather than
+  // trying to guess which moments matter.
+  static readonly PERIOD_MS = 2000;
+
   start() {
-    this.timer = setInterval(() => this.sample(), 2000);
+    this.timer = setInterval(() => this.sample(), FrameSampler.PERIOD_MS);
     void this.sample();
   }
 
@@ -36,13 +42,11 @@ export class FrameSampler {
     diffContext.drawImage(this.video, 0, 0, 64, 36);
     const current = diffContext.getImageData(0, 0, 64, 36).data;
     const changed = this.previous ? this.diff(current, this.previous) : 1;
-    const elapsed = Date.now() - this.lastSentAt;
-    const reason = forceReason ?? (changed > 0.15 ? "diff" : elapsed >= 10000 ? "periodic" : null);
+    // `diff` vs `periodic` is now just metadata (helps scene grouping); every tick is sent.
+    const reason = forceReason ?? (changed > 0.15 ? "diff" : "periodic");
     this.previous = new Uint8ClampedArray(current);
-    if (reason) {
-      this.send(jpeg_b64, reason);
-      this.lastSentAt = Date.now();
-    }
+    this.send(jpeg_b64, reason);
+    this.lastSentAt = Date.now();
   }
 
   private diff(current: Uint8ClampedArray, previous: Uint8ClampedArray) {

@@ -43,9 +43,13 @@ FastAPI LiveSessionManager (api/app/live/session.py)
  ├─ 轉錄連線 me      ─┐ 兩人各自獨立通道、獨立 VAD → 不混音、歸屬不會錯
  ├─ 轉錄連線 remote  ─┘ 逐字稿 ts = 開口時間 (speech_started)
  ├─ EchoFilter (live/echo.py)  開喇叭時與會者的話從麥克風漏回：me 句與 4s 內 remote 句相似即丟棄
- └─ Reasoner (Responses API)  每句一次：近 12 句 + 最新截圖 + 決策清單 → 工具呼叫
-                              session 層守門：anchor 要有指示語/畫面詞 + 畫面；決策要有拍板詞；
-                              同主題決策合併、理由語意去重、同來源 conflict 只留一條
+ ├─ 每 2 秒一張截圖 + 聽到指示語加拍一張 → 全部落地、伺服器時鐘蓋 ts（拍了不代表會用）
+ └─ Reasoner (Responses API)  每句轉錄完成後兩步（不追即時）：
+      A 聽：純文字，近 12 句 + 決策/錨點狀態 → 決策/提醒；有指涉就叫 look_at_screen(物件名)
+      B 看：只在 A 要求時，撈「開口→收口」區間內的截圖（最多 3 張，找不到往前 10s 再找）
+           → create_anchor(frame_index) 或 not_visible
+      session 層守門：anchor 要有指示語 + 完整句 + 視覺信心 ≥0.6；同物件 15s 內更新不新增；
+      決策要有拍板詞；同主題合併、理由語意去重、同來源 conflict 只留一條
         ▼
 Recorder (api/app/record/store.py)  write-first、append-only
  data/sessions/{id}/events.jsonl   事件流（source of truth）
@@ -65,6 +69,10 @@ JSON 是唯一真相、MD 是衍生品；原始片段不改寫。
 兩層畫面連結：**scene（頁）** 每句都有、不需要有人指東西、容許翻頁前後幾秒重疊 → 回答「講成本那頁在講什麼」；
 **anchor** 只在有人指畫面（「右邊這張表」）時建立 → 回答「他說的『那個』是什麼」。
 模型的 confidence 不能當 anchor 放行條件（實測十句對話會出 12 個），指示語是硬條件。
+
+**時間對齊是 grounding 的核心**：語音的開口/收口（`speech_started/stopped.audio_*_ms`）與截圖都在伺服器時鐘上；
+「這個是貓咪杯子」的逐字稿晚 8 秒才到，但系統會回頭撈開口當下的那幾張圖，讓視覺去找語音講的那個名字
+（「指甲剪」），而不是拿最新一張圖硬猜。實機錄音重放：`uv run python -m e2e.replay <session_id>`。
 
 ## Run locally
 

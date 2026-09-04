@@ -34,7 +34,9 @@ async def test_event_lifecycle_time_range_and_nearest_frame(monkeypatch, tmp_pat
     nearest = min(manager.session.frames, key=lambda frame: abs(frame.ts - 100.0))
     assert nearest.ts == 99.6
 
-    engine.events.put_nowait(ToolCall(name="create_anchor", args={"target": "按鈕"}, ts=100.0))
+    engine.events.put_nowait(
+        ToolCall(name="create_anchor", args={"target": "按鈕", "confidence": 0.9}, ts=100.0)
+    )
     await wait_for(lambda: bool(websocket.payloads("grounded_visual_event")))
 
     triggered = websocket.payloads("grounded_visual_event")[0]

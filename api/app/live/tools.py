@@ -1,20 +1,69 @@
 from google.genai import types
 
-TOOL_DEFINITIONS: list[dict] = [
+LOOK_TOOL_DEFINITIONS: list[dict] = [
     {
-        "name": "create_anchor",
-        "description": "建立語音與最新視覺畫面的語義錨點。",
+        "name": "look_at_screen",
+        "description": (
+            "發言者正在指畫面上的某個東西（這個、那個、右邊這張表、鏡頭前的樣品…）。"
+            "說出他「所指／所稱」的東西，系統會去這句話說出期間的畫面裡找它。"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "target": {"type": "string", "description": "被指涉的物件或區域"},
-                "observation": {"type": "string", "description": "對該物件的觀察"},
-                "speaker": {"type": "string", "description": "說話者名稱，可省略"},
-                "confidence": {"type": "number", "description": "0 到 1 的信心度"},
+                "object": {
+                    "type": "string",
+                    "description": "用說話者自己的稱呼（例如「指甲剪」「貓咪杯子」「右邊的長條圖」）；不知道名稱就寫「手上拿的東西」",
+                },
             },
-            "required": ["target", "observation", "confidence"],
+            "required": ["object"],
         },
     },
+]
+
+VISION_TOOL_DEFINITIONS: list[dict] = [
+    {
+        "name": "create_anchor",
+        "description": (
+            "把發言中的指涉（這個、右邊那張…）連到畫面上實際看得到的物件或區域。"
+            "只有在某張畫面確實出現說話者所指／所稱的東西時才呼叫。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "被指涉的物件：先用說話者自己的稱呼（例如「指甲剪」「貓咪杯子」），再加位置",
+                },
+                "observation": {
+                    "type": "string",
+                    "description": "畫面中實際看到的細節（顏色、形狀、文字）",
+                },
+                "frame_index": {
+                    "type": "integer",
+                    "description": "哪一張候選畫面看得到該物件（從 1 開始，對應輸入中的「畫面 N」）",
+                },
+                "speaker": {"type": "string", "description": "說話者名稱，可省略"},
+                "confidence": {
+                    "type": "number",
+                    "description": "0 到 1；看不清楚或畫面沒有該物件時應低於 0.5",
+                },
+            },
+            "required": ["target", "observation", "frame_index", "confidence"],
+        },
+    },
+    {
+        "name": "not_visible",
+        "description": "每一張畫面都看不到說話者所指的東西。",
+        "parameters": {
+            "type": "object",
+            "properties": {"why": {"type": "string", "description": "簡短說明畫面裡有什麼"}},
+            "required": ["why"],
+        },
+    },
+]
+
+TOOL_DEFINITIONS: list[dict] = [
+    *LOOK_TOOL_DEFINITIONS,
     {
         "name": "propose_decision",
         "description": "當團隊正在收斂時，提出一個待人確認的決策候選。",
@@ -71,14 +120,20 @@ def gemini_tools() -> list[types.Tool]:
                     description=tool["description"],
                     parameters_json_schema=tool["parameters"],
                 )
-                for tool in TOOL_DEFINITIONS
+                for tool in [*TOOL_DEFINITIONS, *VISION_TOOL_DEFINITIONS]
             ]
         )
     ]
 
 
 def openai_tools() -> list[dict]:
+    """Step A (listen): decisions, alerts, capture requests, and 'go look at X'."""
     return [{"type": "function", **tool} for tool in TOOL_DEFINITIONS]
+
+
+def look_tools() -> list[dict]:
+    """Step B (look): report where X is in a frame, or that it is not visible."""
+    return [{"type": "function", **tool} for tool in VISION_TOOL_DEFINITIONS]
 
 
 TOOLS = gemini_tools()

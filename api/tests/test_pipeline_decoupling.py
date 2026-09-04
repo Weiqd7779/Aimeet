@@ -71,7 +71,9 @@ async def test_anchor_verification_is_queued_not_inlined(monkeypatch) -> None:
     await wait_for(lambda: bool(websocket.payloads("status")))
     await seed_anchor_context(websocket, engine)
 
-    engine.events.put_nowait(ToolCall(name="create_anchor", args={"target": "x"}, ts=1.0))
+    engine.events.put_nowait(
+        ToolCall(name="create_anchor", args={"target": "x", "confidence": 0.9}, ts=1.0)
+    )
     await wait_for(verifying.is_set)
 
     websocket.incoming.put_nowait({"type": "audio", "pcm16_b64": PCM})
@@ -91,7 +93,9 @@ async def test_create_anchor_requests_deictic_frame() -> None:
     await wait_for(lambda: bool(websocket.payloads("status")))
     await seed_anchor_context(websocket, engine)
 
-    engine.events.put_nowait(ToolCall(name="create_anchor", args={"target": "x"}, ts=1.0))
+    engine.events.put_nowait(
+        ToolCall(name="create_anchor", args={"target": "x", "confidence": 0.9}, ts=1.0)
+    )
     await wait_for(
         lambda: any(payload.get("reason") == "deictic" for payload in websocket.payloads("status"))
     )
@@ -99,7 +103,11 @@ async def test_create_anchor_requests_deictic_frame() -> None:
     websocket.incoming.put_nowait(
         {"type": "frame", "jpeg_b64": JPEG, "ts": 1.0, "reason": "deictic"}
     )
-    await wait_for(lambda: engine.frames[-1] == (jpeg_bytes(), "deictic"))
+    await wait_for(lambda: len(engine.frames) == 2)
+    assert engine.frames[-1][0] == jpeg_bytes()
+    captured = manager.session.frames[-1]
+    assert captured.reason == "deictic"
+    assert engine.frames[-1][1] == captured.id
 
     websocket.incoming.put_nowait({"type": "end"})
     await asyncio.wait_for(run_task, timeout=5)

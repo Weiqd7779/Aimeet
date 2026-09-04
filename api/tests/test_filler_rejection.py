@@ -35,7 +35,9 @@ async def _anchor(text: str, data_dir) -> list[dict]:
     )
     engine.events.put_nowait(Transcript(text=text, ts=10.0))
     await wait_for(lambda: bool(websocket.payloads("transcript")))
-    engine.events.put_nowait(ToolCall(name="create_anchor", args={"target": "x"}, ts=10.0))
+    engine.events.put_nowait(
+        ToolCall(name="create_anchor", args={"target": "x", "confidence": 0.9}, ts=10.0)
+    )
     await asyncio.sleep(0.3)
 
     websocket.incoming.put_nowait({"type": "end"})

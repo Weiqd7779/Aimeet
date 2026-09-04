@@ -1,12 +1,13 @@
 import asyncio
 
 from app.knowledge.store import KnowledgeStore
+from app.live.deictic import DEICTIC
 from app.live.session import (
     COMMIT,
-    DEICTIC,
     UNDECIDED,
     LiveSessionManager,
     _extend_unique,
+    _is_fragment,
     _same_meaning,
 )
 from app.models import Alert, Decision, MeetingSession
@@ -28,6 +29,13 @@ def test_deictic_matches_pointing_and_screen_words_only() -> None:
         "B 的成本超過上限",
     ):
         assert not DEICTIC.search(text), text
+
+
+def test_fragment_gate_waits_for_the_object_to_be_named() -> None:
+    for text in ("以及這個是", "以及這個是...", "然後這個", "這個就是，"):
+        assert _is_fragment(text), text
+    for text in ("這個貓咪杯子是我們之後要出的新產品。", "這個指甲剪非常好用", "你看右邊這張表"):
+        assert not _is_fragment(text), text
 
 
 def test_commit_words_separate_decisions_from_evaluation() -> None:
