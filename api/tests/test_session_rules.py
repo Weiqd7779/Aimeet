@@ -41,6 +41,7 @@ def test_commit_words_separate_decisions_from_evaluation() -> None:
     for text in ("今天要看成本和滿意度", "B 的滿意度最高", "成本可以壓到九百二十"):
         assert not COMMIT.search(text), text
     assert UNDECIDED.search("尚未拍板") and not UNDECIDED.search("Q4 採用 Prototype C")
+    assert not UNDECIDED.search("Q4 採用 Prototype C，Prototype B 留做下一季候選")
 
 
 def test_same_meaning_merges_rewordings_but_never_different_facts() -> None:

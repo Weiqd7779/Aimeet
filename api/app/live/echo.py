@@ -11,7 +11,10 @@ transcript or the reasoning model.
 import re
 from collections import deque
 
+from opencc import OpenCC
 from rapidfuzz import fuzz
+
+_S2T = OpenCC("s2t")  # the two channels may come back in different scripts
 
 HOLD_SECONDS = 1.5  # how long a `me` utterance waits for its remote twin before commit
 MAX_HOLD_SECONDS = 8.0  # ...extended while the remote channel is still mid-sentence
@@ -23,7 +26,7 @@ _STRIP = re.compile(r"[\s,.!?;:，。！？；：、「」『』（）()\-—…
 
 
 def normalize(text: str) -> str:
-    return _STRIP.sub("", text).lower()
+    return _S2T.convert(_STRIP.sub("", text)).lower()
 
 
 def similar(me_text: str, remote_text: str) -> bool:

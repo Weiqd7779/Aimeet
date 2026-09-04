@@ -14,7 +14,14 @@ from starlette.websockets import WebSocketDisconnect
 from app.config import settings
 from app.conflict import check_conflict
 from app.knowledge.store import KnowledgeStore
-from app.live.events import EchoDropped, EngineStatus, IntentResolved, ToolCall, Transcript
+from app.live.events import (
+    EchoDropped,
+    EngineStatus,
+    IntentResolved,
+    Rejected,
+    ToolCall,
+    Transcript,
+)
 from app.live.gemini import GeminiLiveEngine
 from app.live.mock import MockLiveEngine
 from app.live.openai_rt import OpenAIRealtimeEngine
@@ -56,6 +63,8 @@ class ConflictJob:
 
 ProcessingJob = VerifyJob | CloseJob | ConflictJob
 
+logger = logging.getLogger(__name__)
+
 DEICTIC = re.compile(
     # pointing words
     r"這個|那個|這裡|那裡|這邊|那邊|右邊|左邊|上面|下面|這塊|那塊|這張|那張|這頁|那頁|這行|那行"
@@ -72,7 +81,8 @@ COMMIT = re.compile(
     r"|\b(?:decide|decided|go with|let's use|we'll use|settle on|approved)\b",
     re.IGNORECASE,
 )
-UNDECIDED = re.compile(r"尚未|未定|待定|候選|評估中|考慮中|還沒|TBD", re.IGNORECASE)
+# "候選" is deliberately absent: "採用 C，B 留做候選" is a decision *with* a runner-up.
+UNDECIDED = re.compile(r"尚未|未定|待定|評估中|考慮中|還沒決定|TBD", re.IGNORECASE)
 SAME_MEANING = 85  # rapidfuzz score above which two reasons/constraints are one
 MAX_LIST_ITEMS = 6  # reasons/constraints kept per decision list (newest win)
 # standalone numbers (850, 1,020) and option letters (A/B/C); "Q4" is neither
@@ -123,6 +133,7 @@ class LiveSessionManager:
         self.drain_seconds = 10.0
         self._worker: asyncio.Task[None] | None = None
         self._timers: set[asyncio.Task[None]] = set()
+        self._audio_chunks: dict[str, int] = {}
 
     def _elapsed(self) -> float:
         return asyncio.get_running_loop().time() - self._started
@@ -139,6 +150,7 @@ class LiveSessionManager:
         await self.websocket.accept()
         reader_task: asyncio.Task[Any] | None = None
         event_task: asyncio.Task[Any] | None = None
+        reason = "unknown"
         try:
             await self.engine.start(self.session.id)
             self._worker = asyncio.create_task(self._process_jobs())
@@ -155,19 +167,35 @@ class LiveSessionManager:
                 if reader_task in done:
                     try:
                         message = reader_task.result()
-                    except WebSocketDisconnect:
+                    except WebSocketDisconnect as exc:
+                        reason = f"client disconnected (code={exc.code})"
                         break
                     if await self._handle_client_message(message):
+                        reason = "client sent end"
                         break
                     reader_task = asyncio.create_task(self.websocket.receive_json())
                 if event_task in done:
                     event = event_task.result()
                     if await self._handle_engine_event(event):
+                        reason = f"engine status: {getattr(event, 'detail', None)}"
                         break
                     event_task = asyncio.create_task(self.engine.events.get())
+        except Exception as exc:  # we want the reason on disk, then re-raise
+            reason = f"server error: {exc!r}"
+            logger.exception("live session crashed")
+            raise
         finally:
             with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
                 await asyncio.wait_for(self.queue.join(), timeout=self.drain_seconds)
+            self.recorder.note(
+                "closed",
+                {
+                    "reason": reason,
+                    "elapsed": self._elapsed(),
+                    "audio_chunks": self._audio_chunks,
+                    "frames": len(self.session.frames),
+                },
+            )
             for task in (reader_task, event_task, self._worker, *self._timers):
                 if task and not task.done():
                     task.cancel()
@@ -182,14 +210,19 @@ class LiveSessionManager:
         message_type = message.get("type")
         try:
             if message_type == "audio":
+                self._audio_chunks[message.get("source") or "?"] = (
+                    self._audio_chunks.get(message.get("source") or "?", 0) + 1
+                )
                 await self.engine.send_audio(
                     base64.b64decode(message["pcm16_b64"], validate=True),
                     source=message.get("source"),
                 )
             elif message_type == "frame":
                 jpeg_bytes = base64.b64decode(message["jpeg_b64"], validate=True)
+                # Always stamp with the session clock: the browser's `ts` is page uptime and
+                # would put frames on a different timeline from the utterances.
                 frame = Frame(
-                    ts=float(message.get("ts", self._elapsed())),
+                    ts=self._elapsed(),
                     jpeg_b64=message["jpeg_b64"],
                     reason=message.get("reason", "manual"),
                 )
@@ -238,6 +271,14 @@ class LiveSessionManager:
         elif isinstance(event, EchoDropped):
             self.recorder.note("echo_dropped", {"ts": event.ts, "text": event.text})
             await self._emit("status", {"status": "echo_dropped", "detail": event.text})
+        elif isinstance(event, Rejected):
+            self.recorder.note(
+                "stt_rejected",
+                {"ts": event.ts, "speaker": event.speaker, "text": event.text, "why": event.reason},
+            )
+            await self._emit(
+                "status", {"status": "stt_rejected", "detail": f"{event.reason}: {event.text[:60]}"}
+            )
         elif isinstance(event, EngineStatus):
             await self._emit("status", {"status": event.status, "detail": event.detail})
             return event.status in {"script_complete", "disconnected"}

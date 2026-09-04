@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import contextlib
+import re
 import time
 from typing import Any
 
@@ -9,16 +10,28 @@ from openai import AsyncOpenAI
 from app.config import Settings, settings
 from app.live.audio import resample_pcm16
 from app.live.echo import HOLD_SECONDS, MAX_HOLD_SECONDS, EchoFilter
-from app.live.events import EchoDropped, EngineEvent, EngineStatus, IntentResolved, Transcript
+from app.live.events import (
+    EchoDropped,
+    EngineEvent,
+    EngineStatus,
+    IntentResolved,
+    Rejected,
+    Transcript,
+)
+from app.live.hallucination import EnergyTrack, looks_like_prompt, prompt_terms, rms
 from app.live.reasoner import Reasoner
+
+DEICTIC_HINT = re.compile(r"這個|那個|這裡|這邊|那邊|右邊|左邊|這張|那張|這頁|螢幕|畫面|圖表|表格")
+FRESH_FRAME_WAIT = 1.5  # seconds to wait for the deictic-triggered screenshot before reasoning
 
 SPEAKER_LABELS = {"me": "我", "remote": "與會者"}
 NOISE_REDUCTION = {"me": "near_field", "remote": "far_field"}
+# Keep the vocabulary short: the transcriber regurgitates these words as fake speech when
+# the audio has no clear talker (see hallucination.py), and every extra term feeds that.
 TRANSCRIPTION_PROMPT = (
-    "台灣繁體中文的產品與工程會議對話，夾雜英文技術詞彙。請以繁體中文輸出。"
-    "常見詞彙：Prototype A、Prototype B、Prototype C、方案A、方案B、Q4、API、Redis、"
-    "cache layer、issue、BOM、NT$、成本上限、使用者滿意度、滿意度、矽膠包覆、握感、樣品、"
-    "供應商、測試計畫、候選、優先度。"
+    "台灣繁體中文的產品會議對話，夾雜英文技術詞彙。請以繁體中文輸出，"
+    "例如「我們這場會議先討論進度與問題，請確認時間。」"
+    "詞彙：Prototype A、Prototype B、Prototype C、Q4、BOM、滿意度、握感、矽膠包覆、樣品。"
 )
 
 
@@ -63,6 +76,9 @@ class OpenAIRealtimeEngine:
         self.reasoner: Reasoner | None = None
         self._transcribers: dict[str, _Connection] = {}
         self._echo = EchoFilter()
+        self._energy = {source: EnergyTrack() for source in SPEAKER_LABELS}
+        self._terms = prompt_terms(TRANSCRIPTION_PROMPT)
+        self._frame_seq = 0  # bumps on every frame; lets deictic utterances wait for a fresh one
         self._remote_talking = False  # remote VAD: speech_started .. transcription.completed
         self._pending: set[asyncio.Task[None]] = set()
         self._started = time.monotonic()
@@ -131,6 +147,12 @@ class OpenAIRealtimeEngine:
                         transcript = Transcript(
                             text=text, ts=ts if ts is not None else self._elapsed(), speaker=speaker
                         )
+                        rejected = self._hallucination_reason(source, transcript)
+                        if rejected:
+                            await self.events.put(
+                                Rejected(transcript.text, transcript.ts, speaker, rejected)
+                            )
+                            continue
                         if source == "remote":
                             self._echo.note_remote(transcript.ts, transcript.text)
                             await self._commit(transcript)
@@ -143,6 +165,14 @@ class OpenAIRealtimeEngine:
             raise
         except Exception as exc:  # noqa: BLE001
             await self._fail(f"{speaker} transcription: {exc}")
+
+    def _hallucination_reason(self, source: str, transcript: Transcript) -> str | None:
+        if not self._energy[source].had_speech(transcript.ts, self._elapsed()):
+            peak = self._energy[source].peak(transcript.ts, self._elapsed())
+            return f"no speech energy (peak rms {peak:.0f})"
+        if looks_like_prompt(transcript.text, self._terms):
+            return "prompt vocabulary regurgitated"
+        return None
 
     def _spawn(self, coro: Any) -> None:
         task = asyncio.create_task(coro)
@@ -170,8 +200,17 @@ class OpenAIRealtimeEngine:
     async def _reason(self, transcript: Transcript) -> None:
         if not self.reasoner:
             return
+        pointing = bool(DEICTIC_HINT.search(transcript.text))
+        if pointing:
+            # The browser grabs a screenshot when it sees the pointing word in this very
+            # transcript; give that frame a moment to land so we reason about what the
+            # speaker is looking at *now*, not the periodic frame from 10 s ago.
+            seq, waited = self._frame_seq, 0.0
+            while self._frame_seq == seq and waited < FRESH_FRAME_WAIT:
+                await asyncio.sleep(0.1)
+                waited += 0.1
         calls = await self.reasoner.process(
-            transcript.speaker or "?", transcript.text, transcript.ts
+            transcript.speaker or "?", transcript.text, transcript.ts, look_closely=pointing
         )
         for call in calls:
             call.utterance_id = transcript.id
@@ -187,18 +226,18 @@ class OpenAIRealtimeEngine:
         if not transcriber or not transcriber.conn:
             return
         self._buffer_start.setdefault(source or "", self._elapsed())
+        self._energy[source or ""].add(self._elapsed(), rms(audio))
         pcm24 = resample_pcm16(audio)
         await transcriber.conn.input_audio_buffer.append(
             audio=base64.b64encode(pcm24).decode("ascii")
         )
 
     async def send_frame(self, jpeg_bytes: bytes, reason: str = "manual") -> None:
-        now = time.monotonic()
+        del reason
         if not self.reasoner:
             return
-        if reason != "deictic" and now - self._last_frame < 4:
-            return
-        self._last_frame = now
+        self._last_frame = time.monotonic()
+        self._frame_seq += 1
         self.reasoner.set_frame(self._elapsed(), jpeg_bytes)
 
     async def send_text(self, text: str) -> None:

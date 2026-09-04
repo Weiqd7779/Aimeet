@@ -1,0 +1,45 @@
+import numpy as np
+
+from app.live.hallucination import EnergyTrack, looks_like_prompt, prompt_terms, rms
+from app.live.openai_rt import TRANSCRIPTION_PROMPT
+
+TERMS = prompt_terms(TRANSCRIPTION_PROMPT)
+
+# Verbatim from a live session: nobody said this, the transcriber wove it from the prompt.
+LIVE_HALLUCINATION = (
+    "我們討論了幾個重要的議題，包括Prototype A和Prototype B的進度，以及方案A和方案B的可行性。"
+    "我們也檢視了API的整合問題，並討論了Redis和cache layer的優化。針對目前的issue，我們決定優先處理BOM問題，"
+    "以控制成本上限。在使用者滿意度方面，我們計畫進行一系列的測試計畫，以確保握感和矽膠包覆符合需求。"
+)
+
+
+def test_prompt_terms_parsed() -> None:
+    assert "Prototype A" in TERMS and "握感" in TERMS and "台灣繁體中文的產品會議對話" not in TERMS
+
+
+def test_prompt_regurgitation_is_rejected_but_real_sentences_pass() -> None:
+    assert looks_like_prompt(LIVE_HALLUCINATION, TERMS)
+    for text in (
+        "這個貓咪杯子是我們之後要出的新產品。",
+        "Prototype C 的握感問題還沒解，供應商說兩週內可以交樣品。",
+        # 4 vocabulary words in one real sentence (rejected once in D2 - must pass)
+        "Prototype C的滿意度中等,握感的問題還沒解,供應商說兩週內可以交樣品。",
+        "但是 B 的成本是一千零二十，超過我們八百五的上限。",
+    ):
+        assert not looks_like_prompt(text, TERMS), text
+
+
+def _tone(level: int, seconds: float = 0.1) -> bytes:
+    t = np.arange(int(16_000 * seconds))
+    return (np.sin(t / 8) * level).astype("<i2").tobytes()
+
+
+def test_energy_gate_needs_speech_level_audio() -> None:
+    track = EnergyTrack()
+    for i in range(30):  # 3 s of room tone
+        track.add(i / 10, rms(_tone(80)))
+    assert not track.had_speech(0.5, 2.5)
+    for i in range(30, 45):  # then 1.5 s of speech
+        track.add(i / 10, rms(_tone(2000)))
+    assert track.had_speech(3.0, 4.5)
+    assert track.had_speech(0.5, 2.5) is False  # earlier window still silent

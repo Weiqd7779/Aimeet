@@ -6,6 +6,7 @@ import pytest
 
 from app.config import settings
 from app.live.events import ToolCall, Transcript
+from app.models import Frame
 from tests.live_harness import build_manager, jpeg_b64, jpeg_bytes, wait_for
 
 JPEG = jpeg_b64()
@@ -25,11 +26,11 @@ async def test_event_lifecycle_time_range_and_nearest_frame(monkeypatch, tmp_pat
     engine.events.put_nowait(Transcript(text="你看這邊這個按鈕太小", ts=100.0))
     await wait_for(lambda: len(websocket.payloads("transcript")) == 3)
 
-    for ts in (90.0, 99.6, 103.0):
-        websocket.incoming.put_nowait(
-            {"type": "frame", "jpeg_b64": JPEG, "ts": ts, "reason": "diff"}
-        )
-    await wait_for(lambda: len(manager.session.frames) == 3)
+    # Frames carry the session clock, which the fake transcript timestamps do not follow,
+    # so they are placed on the session buffer directly.
+    manager.session.frames.extend(
+        Frame(ts=ts, jpeg_b64=JPEG, reason="diff") for ts in (90.0, 99.6, 103.0)
+    )
     nearest = min(manager.session.frames, key=lambda frame: abs(frame.ts - 100.0))
     assert nearest.ts == 99.6
 
