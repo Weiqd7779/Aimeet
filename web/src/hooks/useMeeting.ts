@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { createAudioPipeline } from "@/lib/audio";
 import { FrameSampler } from "@/lib/frames";
 import { LiveSocket } from "@/lib/ws";
@@ -12,8 +12,11 @@ import type {
   GroundedEvent,
   ReportEnvelope,
   ServerEvent,
+  SpeechEvent,
   TranscriptEntry,
 } from "@/lib/types";
+
+const VOICE_KEY = "aimeet.voiceEnabled";
 
 type SessionStatus = "idle" | "connecting" | "live" | "ended";
 
@@ -113,6 +116,57 @@ export function useMeeting() {
   const streamRef = useRef<MediaStream | null>(null);
   const micRef = useRef<MediaStream | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const speechRef = useRef<HTMLAudioElement | null>(null);
+  const voiceRef = useRef(true);
+  const [voiceEnabled, setVoiceEnabledState] = useState(true);
+  const [speaking, setSpeaking] = useState<SpeechEvent | null>(null); // the reminder being voiced right now
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (state.status !== "live" || startedAt === null) return;
+    const timer = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 1000);
+    return () => clearInterval(timer);
+  }, [state.status, startedAt]);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(VOICE_KEY);
+    if (saved !== null) {
+      voiceRef.current = saved === "1";
+      setVoiceEnabledState(saved === "1");
+    }
+  }, []);
+
+  const setVoiceEnabled = useCallback((enabled: boolean) => {
+    voiceRef.current = enabled;
+    setVoiceEnabledState(enabled);
+    window.localStorage.setItem(VOICE_KEY, enabled ? "1" : "0");
+    if (!enabled && speechRef.current) {
+      speechRef.current.pause();
+      speechRef.current = null;
+      setSpeaking(null);
+    }
+  }, []);
+
+  const playSpeech = useCallback((speech: SpeechEvent) => {
+    if (!voiceRef.current || !speech.audio_b64) return;
+    speechRef.current?.pause(); // a newer reminder supersedes one still talking
+    const audio = new Audio(`data:${speech.mime || "audio/mpeg"};base64,${speech.audio_b64}`);
+    speechRef.current = audio;
+    const done = () => {
+      if (speechRef.current === audio) {
+        speechRef.current = null;
+        setSpeaking(null);
+      }
+    };
+    audio.onended = done;
+    audio.onerror = done;
+    setSpeaking(speech);
+    audio.play().catch(() => {
+      done();
+      dispatch({ type: "toast", message: "瀏覽器阻擋了語音播放，請點一下頁面後再試" });
+    });
+  }, []);
 
   useEffect(() => {
     fetch(`${apiUrl()}/health`)
@@ -140,6 +194,7 @@ export function useMeeting() {
 
   const handleEvent = useCallback((event: ServerEvent) => {
     dispatch({ type: "event", event });
+    if (event.type === "speech") playSpeech(event.payload as SpeechEvent);
     if (event.type === "transcript") {
       const transcript = event.payload as TranscriptEntry;
       if (/這個|那個|這裡|那裡|這邊|那邊|右邊|左邊|上面|下面|這塊|那張|這頁|螢幕|畫面|投影片|簡報|圖表|表格|\b(?:this|that|the)\s+(?:one|chart|table|slide|page|graph|diagram|screen)\b|\bon\s+(?:the\s+)?screen\b/i.test(transcript.text)) {
@@ -153,7 +208,7 @@ export function useMeeting() {
         socketRef.current?.close();
       }
     }
-  }, []);
+  }, [playSpeech]);
 
   const send = useCallback((message: ClientMessage) => socketRef.current?.send(message), []);
 
@@ -165,6 +220,8 @@ export function useMeeting() {
       if (!response.ok) throw new Error("建立 session 失敗");
       const { id } = (await response.json()) as { id: string };
       dispatch({ type: "session", id });
+      setStartedAt(Date.now());
+      setElapsed(0);
       const socket = new LiveSocket(socketUrl(apiUrl(), id), handleEvent, (connected) => {
         if (connected) dispatch({ type: "status", status: "live" });
       });
@@ -243,11 +300,16 @@ export function useMeeting() {
   useEffect(() => () => {
     socketRef.current?.close();
     cleanupMedia();
+    speechRef.current?.pause();
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
   }, [cleanupMedia]);
 
   return {
     ...state,
+    elapsed,
+    speaking,
+    voiceEnabled,
+    setVoiceEnabled,
     sendText,
     start,
     end,
