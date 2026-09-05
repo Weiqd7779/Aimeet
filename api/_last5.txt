@@ -1,0 +1,36 @@
+--- data/sessions\3371c3ff-38b5-46d2-8a3c-e9aa59f9f546
+[   4.8] 我 我們這場會議先討論進度與問題，請確認時間。
+[  10.9] 我 我們這場會議先討論進度與問題，請確認時間。
+[  11.4] 我 我們這場會議先討論進度與問題，請確認時間。
+[  24.5] 我 我們這場會議先討論進度與問題，請確認時間。
+[  25.1] 我 我們這場會議先討論進度與問題，請確認時間。
+--- data/sessions\71729821-8870-428a-ac60-d2a1874cb063
+--- data/sessions\defb069e-cdd7-4308-8926-66bb1b42b1f1
+--- data/sessions\8b0c1627-5d88-4b23-a813-6575092fd1f0
+[   3.0] Alice 我覺得這個手感比較好
+[   9.0] Bob 那個版本成本太高吧
+[  15.0] Alice 那我們就定 Prototype B 吧
+[  24.0] Carol 這一塊直接連資料庫比較快
+[  32.0] Bob 請看第 4 頁
+--- data/sessions\a4bb2576-8e7b-416e-a690-828bf2c60598
+[   3.0] Alice 我覺得這個手感比較好
+[   9.0] Bob 那個版本成本太高吧
+[  15.0] Alice 那我們就定 Prototype B 吧
+[  24.0] Carol 這一塊直接連資料庫比較快
+[  32.0] Bob 請看第 4 頁
+--- data/sessions\ef19c470-5743-46ca-a08d-fd8defbde5d8
+--- data/sessions\8d720a1d-9927-41a9-b7b0-405ca20a946b
+--- data/sessions\d2f22d2d-7d3e-4098-83b7-b716333e5840
+[   3.0] Alice 我覺得這個手感比較好
+[   9.0] Bob 那個版本成本太高吧
+[  15.0] Alice 那我們就定 Prototype B 吧
+[  24.0] Carol 這一塊直接連資料庫比較快
+[  32.0] Bob 請看第 4 頁
+--- data/sessions\2d47ae54-2573-4e07-9cee-b25da429529b
+[   3.0] Alice 我覺得這個手感比較好
+[   9.0] Bob 那個版本成本太高吧
+[  15.0] Alice 那我們就定 Prototype B 吧
+[  24.0] Carol 這一塊直接連資料庫比較快
+[  32.0] Bob 請看第 4 頁
+--- data/sessions\fdaa4cbd-6bb3-47ab-8646-f96d0a288218
+[   8.2] 我 那個Prototype A、Prototype B、Prototype C的進度如何？我們有沒有新的時間表？

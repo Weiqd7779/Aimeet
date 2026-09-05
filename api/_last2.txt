@@ -1,0 +1,6 @@
+data/sessions\fdaa4cbd-6bb3-47ab-8646-f96d0a288218
+[   8.2] 我 那個Prototype A、Prototype B、Prototype C的進度如何？我們有沒有新的時間表？
+   anchor_not_visible {"event": "anchor_not_visible", "utterance_id": "902f8b95-66c9-4316-be31-a54563fade5a", "object": "說話者指的東西"}
+   resolved {"event": "resolved", "utterance_id": "902f8b95-66c9-4316-be31-a54563fade5a", "tools": ["not_visible"]}
+   closed {"event": "closed", "reason": "client sent end", "elapsed": 17.29699999978766, "audio_chunks": {"me": 139, "remote": 139}, "frames": 9}
+   ended {"event": "ended", "utterances": 1}

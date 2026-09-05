@@ -1,13 +1,13 @@
 """Reject transcripts the STT model made up.
 
-Whisper-family transcribers, given a vocabulary prompt and audio with no clear speech
-(room noise, keyboard, someone far away), sometimes emit a fluent paragraph stitched from
-the prompt words. Seen live: 234 characters of "我們討論了 Prototype A ... Redis cache layer
+Whisper-family transcribers, given a context prompt or term hints and audio with no clear
+speech (room noise, keyboard, someone far away), sometimes emit a fluent paragraph stitched
+from those words. Seen live: 234 characters of "我們討論了 Prototype A ... Redis cache layer
 ... BOM 成本上限 ... 握感 矽膠包覆 ... Q4" while nobody said any of it. Two independent
 checks catch this:
 
 1. Energy: the audio window of the utterance never reached speech level.
-2. Vocabulary: the text is mostly the prompt's own terms (several distinct ones at once).
+2. Vocabulary: the text is mostly the expected terms woven into one turn.
 """
 
 import re
@@ -49,12 +49,6 @@ class EnergyTrack:
         return not self._points or self.peak(start, end) >= SPEECH_RMS
 
 
-def prompt_terms(prompt: str) -> list[str]:
-    """Vocabulary items listed in the transcription prompt after 「詞彙：」."""
-    _, _, listing = prompt.partition("詞彙：")
-    return [t.strip("。 ") for t in re.split(r"[、,]", listing) if len(t.strip("。 ")) >= 2]
-
-
 MIN_VERBATIM_CHARS = 6
 _PUNCT = re.compile(r"[\s，。、,.!?！？:：「」()（）]")
 
@@ -64,11 +58,11 @@ def _bare(text: str) -> str:
 
 
 def looks_like_prompt(text: str, terms: list[str], prompt: str = "") -> bool:
-    """True when the transcript is the prompt talking, not a person.
+    """True when the transcript is the model regurgitating hints instead of a person.
 
-    Verbatim: the whole utterance appears inside the prompt (an instruction fragment or
-    a listed term echoed back on its own). Dense: several distinct vocabulary items woven
-    into one turn, which real speech does not do."""
+    Verbatim: the whole utterance appears inside the context prompt (any fragment the model
+    echoed back). Dense: several distinct expected terms woven into one turn, which real
+    speech does not do."""
     bare = _bare(text)
     if prompt and len(bare) >= MIN_VERBATIM_CHARS and bare in _bare(prompt):
         return True

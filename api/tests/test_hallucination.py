@@ -1,9 +1,7 @@
 import numpy as np
 
-from app.live.hallucination import EnergyTrack, looks_like_prompt, prompt_terms, rms
-from app.live.openai_rt import TRANSCRIPTION_PROMPT
-
-TERMS = prompt_terms(TRANSCRIPTION_PROMPT)
+from app.live.hallucination import EnergyTrack, looks_like_prompt, rms
+from app.live.openai_rt import EXPECTED_TERMS, TRANSCRIPTION_PROMPT
 
 # Verbatim from a live session: nobody said this, the transcriber wove it from the prompt.
 LIVE_HALLUCINATION = (
@@ -13,12 +11,12 @@ LIVE_HALLUCINATION = (
 )
 
 
-def test_prompt_terms_parsed() -> None:
-    assert "Prototype A" in TERMS and "握感" in TERMS and "台灣繁體中文的產品會議對話" not in TERMS
+def test_expected_terms_listed() -> None:
+    assert "Prototype A" in EXPECTED_TERMS and "握感" in EXPECTED_TERMS
 
 
 def test_prompt_regurgitation_is_rejected_but_real_sentences_pass() -> None:
-    assert looks_like_prompt(LIVE_HALLUCINATION, TERMS)
+    assert looks_like_prompt(LIVE_HALLUCINATION, EXPECTED_TERMS)
     for text in (
         "這個貓咪杯子是我們之後要出的新產品。",
         "Prototype C 的握感問題還沒解，供應商說兩週內可以交樣品。",
@@ -26,7 +24,7 @@ def test_prompt_regurgitation_is_rejected_but_real_sentences_pass() -> None:
         "Prototype C的滿意度中等,握感的問題還沒解,供應商說兩週內可以交樣品。",
         "但是 B 的成本是一千零二十，超過我們八百五的上限。",
     ):
-        assert not looks_like_prompt(text, TERMS, TRANSCRIPTION_PROMPT), text
+        assert not looks_like_prompt(text, EXPECTED_TERMS, TRANSCRIPTION_PROMPT), text
 
 
 # Live 2026-09-05: the transcriber returned the prompt's own example sentence five times
@@ -34,14 +32,14 @@ def test_prompt_regurgitation_is_rejected_but_real_sentences_pass() -> None:
 # anything that is verbatim prompt text must be rejected even if it does.
 def test_transcription_prompt_has_no_example_sentence() -> None:
     assert "「" not in TRANSCRIPTION_PROMPT and "例如" not in TRANSCRIPTION_PROMPT
+    assert "輸出" not in TRANSCRIPTION_PROMPT and "請以" not in TRANSCRIPTION_PROMPT
 
 
 def test_verbatim_prompt_text_is_rejected() -> None:
     prompt = TRANSCRIPTION_PROMPT + "例如「我們這場會議先討論進度與問題，請確認時間。」"
-    assert looks_like_prompt("我們這場會議先討論進度與問題，請確認時間。", TERMS, prompt)
-    assert looks_like_prompt("請以繁體中文輸出", TERMS, TRANSCRIPTION_PROMPT)
+    assert looks_like_prompt("我們這場會議先討論進度與問題，請確認時間。", EXPECTED_TERMS, prompt)
     # a short real sentence that happens to share a term is fine
-    assert not looks_like_prompt("樣品什麼時候到？", TERMS, TRANSCRIPTION_PROMPT)
+    assert not looks_like_prompt("樣品什麼時候到？", EXPECTED_TERMS, TRANSCRIPTION_PROMPT)
 
 
 def _tone(level: int, seconds: float = 0.1) -> bytes:

@@ -27,6 +27,7 @@ def test_transcription_prompt_contains_no_example_speech() -> None:
     from app.live.openai_rt import TRANSCRIPTION_PROMPT
 
     assert not re.search(r"例如|「", TRANSCRIPTION_PROMPT)
+    assert "輸出" not in TRANSCRIPTION_PROMPT and "請以" not in TRANSCRIPTION_PROMPT
 
 
 def _fact(fact: str, quote: str, resolved: str | None) -> KeyFact:

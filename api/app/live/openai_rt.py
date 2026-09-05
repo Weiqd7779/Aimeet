@@ -17,19 +17,27 @@ from app.live.events import (
     Rejected,
     Transcript,
 )
-from app.live.hallucination import EnergyTrack, looks_like_prompt, prompt_terms, rms
+from app.live.hallucination import EnergyTrack, looks_like_prompt, rms
 from app.live.reasoner import Reasoner
 
 SPEAKER_LABELS = {"me": "我", "remote": "與會者"}
 NOISE_REDUCTION = {"me": "near_field", "remote": "far_field"}
-# Keep the vocabulary short and NEVER include an example sentence: the transcriber
-# regurgitates prompt text as fake speech when the audio has no clear talker (see
-# hallucination.py). A live session once transcribed the example sentence that used to
-# sit here, verbatim, five times in a row while the host was saying something else.
-TRANSCRIPTION_PROMPT = (
-    "台灣繁體中文的產品會議對話，夾雜英文技術詞彙。請以繁體中文輸出。"
-    "詞彙：Prototype A、Prototype B、Prototype C、Q4、BOM、滿意度、握感、矽膠包覆、樣品。"
-)
+# The prompt should only describe the recording setting/context (OpenAI's docs:
+# "Use prompt to describe the recording or its setting"). It must not contain example
+# sentences, output instructions, or anything that looks like speech. Vocabulary hints
+# go to the separate EXPECTED_TERMS list used by the leak detector, not into the prompt.
+TRANSCRIPTION_PROMPT = "台灣繁體中文的產品會議對話，夾雜英文與技術詞彙。"
+EXPECTED_TERMS = [
+    "Prototype A",
+    "Prototype B",
+    "Prototype C",
+    "Q4",
+    "BOM",
+    "滿意度",
+    "握感",
+    "矽膠包覆",
+    "樣品",
+]
 
 
 class _Connection:
@@ -74,7 +82,7 @@ class OpenAIRealtimeEngine:
         self._transcribers: dict[str, _Connection] = {}
         self._echo = EchoFilter()
         self._energy = {source: EnergyTrack() for source in SPEAKER_LABELS}
-        self._terms = prompt_terms(TRANSCRIPTION_PROMPT)
+        self._terms = EXPECTED_TERMS
         self._remote_talking = False  # remote VAD: speech_started .. transcription.completed
         self._pending: set[asyncio.Task[None]] = set()
         self._started = time.monotonic()
