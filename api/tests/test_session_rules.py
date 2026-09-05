@@ -10,7 +10,7 @@ from app.live.session import (
     _is_fragment,
     _same_meaning,
 )
-from app.models import Alert, Decision, MeetingSession
+from app.models import Alert, Decision, GroundedEvent, MeetingSession
 
 
 def test_deictic_matches_pointing_and_screen_words_only() -> None:
@@ -118,5 +118,55 @@ def test_restating_a_decision_does_not_recheck_or_stack_alerts() -> None:
         )
         assert len(manager.session.alerts) == 1 and manager.session.alerts[0].detail == "v2"
         assert first.conflicts == [alert.id]
+
+    asyncio.run(scenario())
+
+
+def test_anchor_merge_is_a_safety_net_for_same_looking_objects() -> None:
+    async def scenario() -> None:
+        manager = _manager()
+        first = manager._merge_anchor(
+            GroundedEvent(
+                ts=15.5,
+                speaker="我",
+                utterance="這個是個手把。",
+                target="手把——右手拿著的黑色遊戲控制器",
+                observation="一個黑色遊戲控制器，兩個類比搖桿與按鍵，右手握著",
+                frame_id="f1",
+                confidence=0.98,
+                said=[],
+                mention_ids=["u1"],
+            )
+        )
+        # model said "new thing" but vision saw the very same controller 6 s later
+        merged = manager._merge_anchor(
+            GroundedEvent(
+                ts=21.8,
+                speaker="我",
+                utterance="我會在9月29號的時候推出這個東西。",
+                target="東西——左手拿著的黑色遊戲手把",
+                observation="一個黑色遊戲控制器，左右握把與搖桿，被手握著",
+                frame_id="f4",
+                confidence=0.93,
+                said=["9月29號推出"],
+                mention_ids=["u4"],
+            )
+        )
+        assert merged is first and len(manager.session.grounded_events) == 1
+        assert first.said == ["9月29號推出"] and first.mention_ids == ["u1", "u4"]
+        assert first.frame_id == "f1"  # keep the higher-confidence look
+        # a genuinely different object is not merged
+        cup = manager._merge_anchor(
+            GroundedEvent(
+                ts=30.0,
+                speaker="我",
+                utterance="這個是貓咪杯子",
+                target="貓咪杯子——舉起的白色馬克杯",
+                observation="白色直筒杯，杯身有戴眼鏡的卡通貓圖案",
+                frame_id="f9",
+                confidence=0.97,
+            )
+        )
+        assert cup is not first and len(manager.session.grounded_events) == 2
 
     asyncio.run(scenario())

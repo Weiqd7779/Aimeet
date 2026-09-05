@@ -75,6 +75,7 @@ def build_mock_report(session: MeetingSession) -> MeetingReport:
             speaker=None,
             ts=decision.ts,
             category="other",
+            resolved_date=None,
         )
         for decision in session.decision_state.decisions
     ]

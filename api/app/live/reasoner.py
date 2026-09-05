@@ -201,7 +201,9 @@ class Reasoner:
         # (「右邊這塊圖表顯示 B 最高」) and skipped look_at_screen, look anyway. The vision
         # step can still answer not_visible, so this only costs one image call.
         if DEICTIC.search(text) and not any(name == LOOK_TOOL for name, _, _ in heard):
-            heard.append((LOOK_TOOL, {"object": _pointed_object(text)}, None))
+            heard.append(
+                (LOOK_TOOL, {"object": _pointed_object(text), "refers_to": None, "about": ""}, None)
+            )
 
         calls: list[ToolCall] = []
         for name, args, call_id in heard:
@@ -209,12 +211,27 @@ class Reasoner:
                 target = str(args.get("object", "")).strip()
                 if not target:
                     continue
+                about = str(args.get("about") or "").strip()
+                refers_to = args.get("refers_to") or None
+                if refers_to:
+                    # Same thing as an existing anchor: no need to look again, just attach
+                    # what was said about it. The session double-checks the reference.
+                    calls.append(
+                        ToolCall(
+                            name="update_anchor",
+                            args={"anchor_id": refers_to, "object": target, "about": about},
+                            id=call_id,
+                            ts=ts,
+                        )
+                    )
+                    continue
                 found = await self._look(
                     speaker, text, target, ts, ended if ended is not None else ts
                 )
                 if found:
                     anchor_args, anchor_call_id = found
                     anchor_args.setdefault("speaker", speaker)
+                    anchor_args["about"] = about
                     calls.append(
                         ToolCall(name="create_anchor", args=anchor_args, id=anchor_call_id, ts=ts)
                     )

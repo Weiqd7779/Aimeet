@@ -28,6 +28,8 @@ export interface GroundedEvent {
   observation: string;
   frame_id: string | null;
   confidence: number;
+  said?: string[];
+  mention_ids?: string[];
 }
 
 export interface Alert {
@@ -121,6 +123,7 @@ export interface KeyFact {
   speaker: string | null;
   ts: number | null;
   category: "number" | "date" | "person" | "constraint" | "requirement" | "action" | "other";
+  resolved_date?: string | null;
 }
 
 export interface ScenePage {

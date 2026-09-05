@@ -18,6 +18,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.models import (
     Alert,
     Decision,
@@ -280,7 +282,12 @@ def load_session(root: str | Path, session_id: str) -> MeetingSession | None:
     report_path = folder / "report.json"
     if report_path.exists():
         saved = json.loads(report_path.read_text(encoding="utf-8"))
-        session.report = MeetingReport(**saved["report"])
-        session.report_model = saved.get("model")
-        session.report_mock = saved.get("mock")
+        try:
+            session.report = MeetingReport(**saved["report"])
+            session.report_model = saved.get("model")
+            session.report_mock = saved.get("mock")
+        except ValidationError:
+            # Report written by an older schema: drop it, the record itself is intact and
+            # the report can be regenerated.
+            session.report = None
     return session
