@@ -7,6 +7,7 @@ needs semantic reading is delegated to an LLM judge that must return a verdict +
 import json
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -277,6 +278,7 @@ async def llm_judge(result: RunResult, verdict: Verdict) -> None:
         {"at": s.at, "speaker": s.speaker, "say": s.say, "frame": s.frame, "text": s.text}
         for s in result.scenario.steps
     ]
+    meeting_date = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d（%a）")
     frames_note = ""
     if any(s.frame == "chart" for s in result.scenario.steps):
         frames_note += (
@@ -300,6 +302,8 @@ async def llm_judge(result: RunResult, verdict: Verdict) -> None:
         "- 系統可引用內建知識庫（ADR、過去決議、需求文件，例如 Prototype A 的過去決議、成本上限）；"
         "這些內容出現在報告中不算捏造。只有腳本與知識庫都沒有的內容才算「無中生有」。\n"
         "- 語音辨識的同音錯字（如「握趕」→「握感」）不算系統捏造；看報告是否正確理解即可。\n"
+        f"- 會議日期是 {meeting_date}。系統會把腳本裡的相對時間（下週三、兩週內）換算成以會議日期為基準的"
+        " YYYY-MM-DD 寫進報告，這是設計行為，不算捏造；只有換算錯誤或腳本根本沒提到的日期才算。\n"
         "- 有證據支持通過就判通過；理由用一兩句繁體中文說明，指出具體依據。\n\n"
         f"腳本：{json.dumps(script, ensure_ascii=False)}{frames_note}\n\n"
         f"系統輸出：{json.dumps(_summary(result), ensure_ascii=False)}\n\n"

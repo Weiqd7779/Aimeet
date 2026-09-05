@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Aimeet · Live Multimodal Decision Agent",
-  description: "Grounded evidence for better meeting decisions.",
+  title: "Aimeet · 即時多模態會議助理",
+  description: "有畫面佐證的會議決策紀錄。",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

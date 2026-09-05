@@ -103,6 +103,18 @@
   全部 prompt 移除具體日期範例（單元測試守住）；會議日期餵給 Luna，key_facts 加 `resolved_date`（YYYY-MM-DD）；
   PRD/工作項只准用 resolved_date；程式再掃一次報告，對不回逐字稿的日期寫進 uncertainties。
 - 第二個人與主持人同房 → 全部歸「我」（麥克風直接收到）。預期行為；測與會者通道對方要在別處。
+- 「還有這一包衛生紙。／要被加入是我們的合作對象。」被報告寫成「語意不完整」→ 兩個原因：
+  (1) 我用 6 秒靜默切發言回合，剛好把上下文切開；(2) extract prompt 叫模型「每個資訊一筆」，等於鼓勵逐句孤立讀。
+  改成：回合只在**換人**時切（`sentences` 保留每句時間；頁面歸檔仍以句為單位）；synthesis 前多一步 **segment**——
+  模型讀完全文後切主題段落（`topics`，含 gist / quotes），key_facts 掛 `topic`、quote 可跨句。
+  重放：t3「衛生紙合作對象：這包衛生紙要被加入為合作對象」，uncertainties 不再有「語意不完整」。
+- PRD「驗收標準」只是功能描述換句話說 → prompt 改主題章節制，且沒有數字/限制/決策就不寫驗收標準；
+  程式層再保險：key_facts 沒有 number/constraint 且無決策時，`strip_sections` 把該段刪掉（單元測試）。日期集中「時程」。
+- 視覺 observation（「黑色長方形裝置，雙手舉在臉前」）被當事實寫進 summary/PRD → prompt 明令外觀描述只用來對代名詞，不列事實。
+- Mermaid 切分頁就消失 → 前端每次都用同一個固定 id 呼叫 `mermaid.render`，第二次 throw 被 catch 成空字串。
+  改為每個報告 render 一次、唯一 id、失敗顯示錯誤與原始碼；沒決策時改畫主題→事實→時程關係圖，不准回空字串。
+- Luna 偶爾在 scene-index 漏回一頁（D2/D3 同一輪都出現）→ 缺的頁再問一次（`_index_scenes`）。
+- 介面全部改台灣中文；Open questions / Uncertainties 收進「重點資訊」底部可摺疊的備註。
 
 ## 已知限制
 

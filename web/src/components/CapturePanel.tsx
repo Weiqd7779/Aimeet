@@ -32,8 +32,8 @@ export function CapturePanel({
     <section className="panel flex min-h-[600px] flex-col">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <p className="eyebrow">01 / CAPTURE</p>
-          <h2 className="text-xl font-semibold text-white">Meeting canvas</h2>
+          <p className="eyebrow">01 · 擷取</p>
+          <h2 className="text-xl font-semibold text-white">會議畫面</h2>
         </div>
         <Camera className="text-cyan-300" size={20} />
       </div>
@@ -42,24 +42,24 @@ export function CapturePanel({
         {!videoRef.current?.srcObject && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-slate-500">
             <Video size={28} />
-            <span className="text-xs">Shared screen preview</span>
+            <span className="text-xs">分享畫面預覽</span>
           </div>
         )}
       </div>
       <div className="mt-4 grid grid-cols-3 gap-2">
         <button className="button-primary" disabled={busy} onClick={() => meeting.start(false, videoRef.current)}>
-          <Video size={15} /> Start Meeting
+          <Video size={15} /> 開始會議
         </button>
         <button className="button-secondary" disabled={busy} onClick={() => meeting.start(true, null)}>
-          <Mic size={15} /> Start Mock Demo
+          <Mic size={15} /> 模擬示範
         </button>
         <button className="button-danger" disabled={!busy} onClick={meeting.end}>
-          <Square size={14} fill="currentColor" /> End
+          <Square size={14} fill="currentColor" /> 結束
         </button>
       </div>
       <form onSubmit={submit} className="mt-5">
         <label htmlFor="typed-text" className="mb-2 block text-xs font-medium text-slate-400">
-          說一句話（demo 用）
+          輸入一句話（示範用）
         </label>
         <div className="flex gap-2">
           <input
@@ -76,14 +76,14 @@ export function CapturePanel({
       </form>
       <div className={`mt-5 min-h-0 flex-1 ${comparison ? "rounded-xl bg-slate-800/60 p-3" : ""}`}>
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="section-title">{comparison ? "Plain transcript" : "Live transcript"}</h3>
-          <span className="text-[10px] uppercase tracking-widest text-slate-500">{meeting.transcript.length} lines</span>
+          <h3 className="section-title">{comparison ? "純逐字稿" : "即時逐字稿"}</h3>
+          <span className="text-[10px] tracking-widest text-slate-500">{meeting.transcript.length} 句</span>
         </div>
         <div className="max-h-64 space-y-3 overflow-y-auto pr-1">
-          {meeting.transcript.length === 0 && <p className="empty-state">等待語音或 demo 文字…</p>}
+          {meeting.transcript.length === 0 && <p className="empty-state">等待語音或示範文字…</p>}
           {meeting.transcript.map((entry, index) => (
             <div key={`${entry.ts}-${index}`} className="flex gap-3 text-sm">
-              <span className="speaker-chip">{entry.speaker || "Speaker"}</span>
+              <span className="speaker-chip">{entry.speaker || "未知"}</span>
               <p className="min-w-0 flex-1 text-slate-200">{entry.text}</p>
               <time className="shrink-0 font-mono text-[10px] text-slate-500">{timestamp(entry.ts)}</time>
             </div>

@@ -22,6 +22,14 @@ def test_prompts_and_tool_schemas_contain_no_concrete_date_examples() -> None:
         assert not CONCRETE_DATE.search(text), CONCRETE_DATE.search(text).group(0)  # type: ignore[union-attr]
 
 
+def test_transcription_prompt_contains_no_example_speech() -> None:
+    """The STT model echoes example sentences back as transcripts (seen live, 5x in a row)."""
+    from app.live.openai_rt import TRANSCRIPTION_PROMPT
+
+    assert not re.search(r"例如|「", TRANSCRIPTION_PROMPT)
+    assert "輸出" not in TRANSCRIPTION_PROMPT and "請以" not in TRANSCRIPTION_PROMPT
+
+
 def _fact(fact: str, quote: str, resolved: str | None) -> KeyFact:
     return KeyFact(
         fact=fact, quote=quote, speaker="我", ts=1.0, category="date", resolved_date=resolved
@@ -62,3 +70,16 @@ def test_dates_in_derived_text_must_come_from_resolved_facts() -> None:
 def test_relative_word_is_fine_when_the_speaker_actually_said_it() -> None:
     facts = [_fact("下週三前發測試計畫", "我會在下週三前把測試計畫發給大家", "2026-09-09")]
     assert ungrounded_dates(_report("測試計畫：下週三前（2026-09-09）。", facts)) == []
+
+
+def test_acceptance_criteria_are_dropped_when_nothing_is_measurable() -> None:
+    from app.synthesis.service import strip_sections
+
+    prd = "# 標題\n\n## 手機\n介紹了一支手機。\n\n### 驗收標準\n- 內容中包含一支手機。\n\n## 時程\n- 2026-09-09 處理。\n"
+    assert (
+        strip_sections(prd, "驗收標準")
+        == "# 標題\n\n## 手機\n介紹了一支手機。\n\n## 時程\n- 2026-09-09 處理。\n"
+    )
+    # a top-level section is removed through the next top-level heading only
+    prd2 = "## 驗收標準\n- a\n### 子項\n- b\n## 時程\n- c\n"
+    assert strip_sections(prd2, "驗收標準") == "## 時程\n- c\n"

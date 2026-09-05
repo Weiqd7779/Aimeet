@@ -18,8 +18,8 @@ export function AlertsPanel({ meeting, dimmed = false }: { meeting: MeetingState
       <section className="panel">
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <p className="eyebrow">02 / LIVE SIDEBAR</p>
-            <h2 className="text-xl font-semibold text-white">Silent Alerts</h2>
+            <p className="eyebrow">02 · 即時提醒</p>
+            <h2 className="text-xl font-semibold text-white">靜默提醒</h2>
           </div>
           <div className="relative text-slate-400">
             <Bell size={19} />
@@ -33,9 +33,9 @@ export function AlertsPanel({ meeting, dimmed = false }: { meeting: MeetingState
               <div className="flex items-start gap-2">
                 {alert.kind === "conflict" ? <AlertTriangle className="mt-0.5 shrink-0 text-red-300" size={16} /> : <Bell className="mt-0.5 shrink-0 text-amber-200" size={16} />}
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold text-white">{alert.kind === "conflict" ? "⚠ Potential Conflict" : alert.title}</p>
+                  <p className="text-xs font-semibold text-white">{alert.kind === "conflict" ? "⚠ 可能與既有決議衝突" : alert.title}</p>
                   <p className="mt-1 text-xs leading-5 text-slate-200">{alert.detail}</p>
-                  {alert.source && <p className="mt-2 text-[10px] text-slate-400">Source: {alert.source}</p>}
+                  {alert.source && <p className="mt-2 text-[10px] text-slate-400">來源：{alert.source}</p>}
                 </div>
               </div>
               {alert.status === "open" && (
@@ -52,8 +52,8 @@ export function AlertsPanel({ meeting, dimmed = false }: { meeting: MeetingState
         <div className="mb-4 flex items-center gap-2">
           <Target className="text-cyan-300" size={18} />
           <div>
-            <p className="eyebrow">VISUAL GROUNDING</p>
-            <h2 className="text-xl font-semibold text-white">Grounded Events</h2>
+            <p className="eyebrow">畫面指涉</p>
+            <h2 className="text-xl font-semibold text-white">指涉物件</h2>
           </div>
         </div>
         <div className="space-y-3">
@@ -62,7 +62,7 @@ export function AlertsPanel({ meeting, dimmed = false }: { meeting: MeetingState
             <article key={event.id} data-testid="grounded-event" className="rounded-xl border border-cyan-300/15 bg-cyan-300/[0.04] p-3">
               <div className="flex gap-3">
                 <div className="relative h-16 w-24 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-slate-900">
-                  {event.frame_id && meeting.sessionId ? <Image fill unoptimized src={`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")}/sessions/${meeting.sessionId}/frames/${event.frame_id}.jpg`} alt={event.target} className="object-cover" /> : <div className="flex h-full items-center justify-center text-[10px] text-slate-600">No frame</div>}
+                  {event.frame_id && meeting.sessionId ? <Image fill unoptimized src={`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")}/sessions/${meeting.sessionId}/frames/${event.frame_id}.jpg`} alt={event.target} className="object-cover" /> : <div className="flex h-full items-center justify-center text-[10px] text-slate-600">無畫面</div>}
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-white">{event.target}</p>
@@ -72,7 +72,7 @@ export function AlertsPanel({ meeting, dimmed = false }: { meeting: MeetingState
                     </ul>
                   )}
                   <p className="mt-1 text-[11px] text-slate-400">{event.observation}</p>
-                  <p className="mt-2 text-[10px] text-slate-500">{event.speaker || "Speaker"} · {timestamp(event.ts)}{(event.mention_ids ?? []).length > 1 ? ` · 提到 ${event.mention_ids!.length} 次` : ""}</p>
+                  <p className="mt-2 text-[10px] text-slate-500">{event.speaker || "未知"} · {timestamp(event.ts)}{(event.mention_ids ?? []).length > 1 ? ` · 提到 ${event.mention_ids!.length} 次` : ""}</p>
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-2">

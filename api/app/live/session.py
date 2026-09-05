@@ -260,7 +260,11 @@ class LiveSessionManager:
             self.session.transcript.append(transcript)
             self._trim_buffers()
             self.recorder.add_utterance(
-                id=transcript.id, ts=transcript.ts, speaker=transcript.speaker, text=transcript.text
+                id=transcript.id,
+                ts=transcript.ts,
+                speaker=transcript.speaker,
+                text=transcript.text,
+                peak_rms=getattr(event, "peak_rms", None),
             )
             await self._emit("transcript", transcript.model_dump())
         elif isinstance(event, ToolCall):

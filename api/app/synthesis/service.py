@@ -1,8 +1,9 @@
 """Post-meeting synthesis as a small pipeline; each model call has exactly one job.
 
-1. extract   record JSON (+frames) -> facts / decisions / questions / uncertainties
+0. segment   whole transcript -> topics (where one subject ends and the next begins)
+1. extract   record JSON + topics (+frames) -> facts / decisions / questions / uncertainties
 2. coverage  utterances vs key_facts -> anything the extraction missed, merged back in
-3. derive    extraction -> mermaid | prd | work items   (parallel, no raw transcript)
+3. derive    topics + extraction -> mermaid | prd | work items   (parallel, no raw transcript)
 """
 
 import asyncio
@@ -23,6 +24,7 @@ from app.synthesis.prompt import (
     EXTRACT_INSTRUCTIONS,
     PRD_INSTRUCTIONS,
     SCENE_INDEX_INSTRUCTIONS,
+    SEGMENT_INSTRUCTIONS,
     WORK_ITEMS_INSTRUCTIONS,
 )
 from app.synthesis.record import build_record, scene_pages
@@ -33,6 +35,7 @@ from app.synthesis.schemas import (
     MeetingReport,
     Prd,
     SceneIndex,
+    Segmentation,
     WorkItems,
 )
 
@@ -94,10 +97,31 @@ async def synthesize(
 
     client = AsyncOpenAI(api_key=settings.openai_api_key)
     record = build_record(session, knowledge)
+    utterances = [item for item in record["timeline"] if item["type"] == "utterance"]
+
+    # 0. segment: read everything, then decide where the subject changes
+    transcript_only = {
+        k: v for k, v in record.items() if k not in ("pages", "decision_state", "knowledge_sources")
+    }
+    segmentation = (
+        await _call(
+            client,
+            selected_model,
+            SEGMENT_INSTRUCTIONS,
+            [{"type": "input_text", "text": "會議紀錄：\n" + _dumps(transcript_only)}],
+            Segmentation,
+        )
+        if utterances
+        else Segmentation(topics=[])
+    )
+    topics = [topic.model_dump() for topic in segmentation.topics]
 
     # 1. extract
     content: list[dict[str, str]] = [
-        {"type": "input_text", "text": "會議紀錄：\n" + _dumps(record)}
+        {
+            "type": "input_text",
+            "text": "會議紀錄：\n" + _dumps(record) + "\n\ntopics：\n" + _dumps(topics),
+        }
     ]
     frames = {frame.id: frame for frame in session.frames}
     for frame_id in _frame_ids(session):
@@ -112,7 +136,6 @@ async def synthesize(
     extraction = await _call(client, selected_model, EXTRACT_INSTRUCTIONS, content, Extraction)
 
     # 2. coverage check -> merge anything missed
-    utterances = [item for item in record["timeline"] if item["type"] == "utterance"]
     coverage = await _call(
         client,
         selected_model,
@@ -122,6 +145,8 @@ async def synthesize(
                 "type": "input_text",
                 "text": "meeting_date：\n"
                 + _dumps(record["meeting_date"])
+                + "\n\ntopics：\n"
+                + _dumps(topics)
                 + "\n\nutterances：\n"
                 + _dumps(utterances)
                 + "\n\nkey_facts：\n"
@@ -136,13 +161,45 @@ async def synthesize(
     basis = [
         {
             "type": "input_text",
-            "text": "決策表：\n"
+            "text": "主題段落：\n"
+            + _dumps(topics)
+            + "\n\n決策表：\n"
             + _dumps([row.model_dump() for row in extraction.decision_table])
             + "\n\n關鍵事實：\n"
             + _dumps([fact.model_dump() for fact in key_facts]),
         }
     ]
-    scene_input = [
+    diagram, prd, work_items, index = await asyncio.gather(
+        _call(client, selected_model, DIAGRAM_INSTRUCTIONS, basis, Diagram),
+        _call(client, selected_model, PRD_INSTRUCTIONS, basis, Prd),
+        _call(client, selected_model, WORK_ITEMS_INSTRUCTIONS, basis, WorkItems),
+        _index_scenes(client, selected_model, record["pages"]),
+    )
+
+    measurable = extraction.decision_table or any(
+        fact.category in ("number", "constraint") for fact in key_facts
+    )
+    report = MeetingReport(
+        summary=extraction.summary,
+        topics=segmentation.topics,
+        key_facts=key_facts,
+        decision_table=extraction.decision_table,
+        mermaid=diagram.mermaid,
+        mermaid_caption=diagram.mermaid_caption,
+        prd_markdown=prd.prd_markdown
+        if measurable
+        else strip_sections(prd.prd_markdown, "驗收標準"),
+        work_items=work_items.work_items,
+        open_questions=extraction.open_questions,
+        uncertainties=extraction.uncertainties,
+        scenes=scene_pages(session, index),
+    )
+    report.uncertainties.extend(ungrounded_dates(report))
+    return report
+
+
+def _scene_input(pages: list[dict]) -> list[dict[str, str]]:
+    return [
         {
             "type": "input_text",
             "text": "pages：\n"
@@ -156,38 +213,46 @@ async def synthesize(
                             if i["type"] == "utterance"
                         ]
                     }
-                    for page in record["pages"]
+                    for page in pages
                 ]
             ),
         }
     ]
-    diagram, prd, work_items, index = await asyncio.gather(
-        _call(client, selected_model, DIAGRAM_INSTRUCTIONS, basis, Diagram),
-        _call(client, selected_model, PRD_INSTRUCTIONS, basis, Prd),
-        _call(client, selected_model, WORK_ITEMS_INSTRUCTIONS, basis, WorkItems),
-        _call(client, selected_model, SCENE_INDEX_INSTRUCTIONS, scene_input, SceneIndex)
-        if record["pages"]
-        else _no_scenes(),
-    )
-
-    report = MeetingReport(
-        summary=extraction.summary,
-        key_facts=key_facts,
-        decision_table=extraction.decision_table,
-        mermaid=diagram.mermaid,
-        mermaid_caption=diagram.mermaid_caption,
-        prd_markdown=prd.prd_markdown,
-        work_items=work_items.work_items,
-        open_questions=extraction.open_questions,
-        uncertainties=extraction.uncertainties,
-        scenes=scene_pages(session, index),
-    )
-    report.uncertainties.extend(ungrounded_dates(report))
-    return report
 
 
-async def _no_scenes() -> None:
-    return None
+async def _index_scenes(client: AsyncOpenAI, model: str, pages: list[dict]) -> SceneIndex | None:
+    """Title + summary per page. The model occasionally drops a page from its answer,
+    which surfaced as an empty '第 N 頁' card; ask again for just the missing ones."""
+    if not pages:
+        return None
+    index = await _call(client, model, SCENE_INDEX_INSTRUCTIONS, _scene_input(pages), SceneIndex)
+    got = {entry.scene_id for entry in index.scenes}
+    if missing := [page for page in pages if page["scene_id"] not in got]:
+        retry = await _call(
+            client, model, SCENE_INDEX_INSTRUCTIONS, _scene_input(missing), SceneIndex
+        )
+        index.scenes.extend(retry.scenes)
+    return index
+
+
+def strip_sections(markdown: str, heading: str) -> str:
+    """Drop every `#… heading` section (through the next heading of equal or higher level).
+    Used for acceptance criteria when nothing in the meeting was measurable: the model
+    otherwise pads the section by restating the feature description as criteria."""
+    out: list[str] = []
+    skip_level = 0
+    for line in markdown.splitlines():
+        match = re.match(r"^(#{1,6})\s+(.*)", line)
+        if match:
+            level = len(match.group(1))
+            if skip_level and level <= skip_level:
+                skip_level = 0
+            if heading in match.group(2):
+                skip_level = level
+                continue
+        if not skip_level:
+            out.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip() + "\n"
 
 
 ISO_DATE = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
