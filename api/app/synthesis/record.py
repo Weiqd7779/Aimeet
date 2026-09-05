@@ -6,6 +6,7 @@ So consecutive fragments from the same speaker are merged into one turn, and eve
 signal (frames, grounded events, decisions, alerts) is interleaved on the same timeline.
 """
 
+from datetime import timedelta, timezone
 from typing import Any
 
 from app.knowledge.store import KnowledgeStore
@@ -14,6 +15,8 @@ from app.synthesis.schemas import SceneIndex, ScenePage
 
 MERGE_GAP_SECONDS = 6.0
 SPEAKER_ROLES = {"我": "主持人（本機麥克風）", "與會者": "遠端與會者（會議音訊）"}
+MEETING_TZ = timezone(timedelta(hours=8))  # Asia/Taipei (no tzdata dependency on Windows)
+WEEKDAYS = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
 
 
 def merge_turns(entries: list[TranscriptEntry]) -> list[dict[str, Any]]:
@@ -153,7 +156,13 @@ def build_record(session: MeetingSession, knowledge: KnowledgeStore) -> dict[str
     ]
     speakers = sorted({entry.speaker for entry in session.transcript if entry.speaker})
     timeline = build_timeline(session)
+    started = session.started_at.astimezone(MEETING_TZ)
     return {
+        "meeting_date": {
+            "date": started.strftime("%Y-%m-%d"),
+            "weekday": WEEKDAYS[started.weekday()],
+            "note": "相對時間（下週三、兩週內）一律以此為基準換算；原話沒有年份就用這一年。",
+        },
         "participants": [
             {"speaker": speaker, "role": SPEAKER_ROLES.get(speaker, "未知")} for speaker in speakers
         ],

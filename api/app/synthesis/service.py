@@ -7,6 +7,7 @@
 
 import asyncio
 import json
+import re
 from typing import TypeVar
 
 from openai import AsyncOpenAI
@@ -119,7 +120,9 @@ async def synthesize(
         [
             {
                 "type": "input_text",
-                "text": "utterances：\n"
+                "text": "meeting_date：\n"
+                + _dumps(record["meeting_date"])
+                + "\n\nutterances：\n"
                 + _dumps(utterances)
                 + "\n\nkey_facts：\n"
                 + _dumps([fact.model_dump() for fact in extraction.key_facts]),
@@ -167,7 +170,7 @@ async def synthesize(
         else _no_scenes(),
     )
 
-    return MeetingReport(
+    report = MeetingReport(
         summary=extraction.summary,
         key_facts=key_facts,
         decision_table=extraction.decision_table,
@@ -179,7 +182,34 @@ async def synthesize(
         uncertainties=extraction.uncertainties,
         scenes=scene_pages(session, index),
     )
+    report.uncertainties.extend(ungrounded_dates(report))
+    return report
 
 
 async def _no_scenes() -> None:
     return None
+
+
+ISO_DATE = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
+RELATIVE_TIME = re.compile(
+    r"下週[一二三四五六日]?|下周|下個月|月底|兩週內|下星期|next week|tomorrow"
+)
+
+
+def ungrounded_dates(report: MeetingReport) -> list[str]:
+    """Dates the derived artifacts use that no key fact resolved to. The model was told
+    to use only `resolved_date`; anything else is flagged so a wrong date is visible
+    instead of silently authoritative (the PRD once said 「下週三」 for a 9/29 launch)."""
+    allowed = {f.resolved_date for f in report.key_facts if f.resolved_date}
+    derived = [report.prd_markdown, report.summary] + [
+        f"{w.title}\n{w.body_markdown}" for w in report.work_items
+    ]
+    problems: list[str] = []
+    for text in derived:
+        for match in ISO_DATE.finditer(text):
+            if match.group(0) not in allowed:
+                problems.append(f"報告出現無法對回逐字稿的日期：{match.group(0)}")
+        for match in RELATIVE_TIME.finditer(text):
+            if not any(match.group(0) in f.quote for f in report.key_facts):
+                problems.append(f"報告出現逐字稿沒有的相對時間：「{match.group(0)}」")
+    return list(dict.fromkeys(problems))

@@ -66,8 +66,13 @@ export function AlertsPanel({ meeting, dimmed = false }: { meeting: MeetingState
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-white">{event.target}</p>
-                  <p className="mt-1 text-xs text-slate-300">{event.observation}</p>
-                  <p className="mt-2 text-[10px] text-slate-500">{event.speaker || "Speaker"} · {timestamp(event.ts)}</p>
+                  {(event.said ?? []).length > 0 && (
+                    <ul className="mt-1 space-y-0.5 text-xs text-cyan-100">
+                      {(event.said ?? []).map((line) => <li key={line}>· {line}</li>)}
+                    </ul>
+                  )}
+                  <p className="mt-1 text-[11px] text-slate-400">{event.observation}</p>
+                  <p className="mt-2 text-[10px] text-slate-500">{event.speaker || "Speaker"} · {timestamp(event.ts)}{(event.mention_ids ?? []).length > 1 ? ` · 提到 ${event.mention_ids!.length} 次` : ""}</p>
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-2">

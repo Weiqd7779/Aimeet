@@ -37,6 +37,9 @@ class KeyFact(BaseModel):
     speaker: str | None = Field(...)
     ts: float | None = Field(...)
     category: Literal["number", "date", "person", "constraint", "requirement", "action", "other"]
+    resolved_date: str | None = Field(
+        ..., description="若 fact 含日期/時程且可依會議日期換算，填 YYYY-MM-DD；否則 null"
+    )
 
 
 # --- Pipeline stage outputs -------------------------------------------------

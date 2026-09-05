@@ -34,6 +34,14 @@ async def main(session_id: str, only: list[str]) -> None:
         f"{len(record['frames'])} frames loaded, ts {record['frames'][0]['ts']:.1f}..{record['frames'][-1]['ts']:.1f}"
     )
 
+    # Minimal stand-in for the session's anchor bookkeeping so refers_to can be exercised.
+    anchors: list[dict] = []
+    reasoner.context_provider = lambda: "\n".join(
+        f"- anchor id={a['id']} @{a['ts']:.0f}s {a['speaker']} 指的是「{a['target']}」"
+        + (f"；已記錄：{'；'.join(a['said'])}" if a["said"] else "")
+        for a in anchors[-3:]
+    )
+
     events = [json.loads(l) for l in (folder / "events.jsonl").read_text("utf-8").splitlines()]
     utterances = [e for e in events if e["event"] == "utterance"]
     for u in utterances:
@@ -45,14 +53,35 @@ async def main(session_id: str, only: list[str]) -> None:
         calls = await reasoner.process(u["speaker"], u["text"], u["ts"], ended=ended)
         print(f"\n[{u['ts']:6.1f}] {u['speaker']} {u['text']}")
         for call in calls:
+            a = call.args
             if call.name == "create_anchor":
-                a = call.args
+                anchors.append(
+                    {
+                        "id": f"a{len(anchors) + 1}",
+                        "ts": u["ts"],
+                        "speaker": u["speaker"],
+                        "target": a.get("target"),
+                        "said": [a["about"]] if a.get("about") else [],
+                    }
+                )
                 print(
-                    f"   -> ANCHOR conf={a.get('confidence')} frame_ts={a.get('frame_ts', 0):.1f}\n"
-                    f"      target: {a.get('target')}\n      obs: {str(a.get('observation'))[:140]}"
+                    f"   -> NEW ANCHOR {anchors[-1]['id']} conf={a.get('confidence')} "
+                    f"frame_ts={a.get('frame_ts', 0):.1f}\n"
+                    f"      target: {a.get('target')}\n      obs: {str(a.get('observation'))[:140]}\n"
+                    f"      said: {anchors[-1]['said']}"
+                )
+            elif call.name == "update_anchor":
+                hit = next((x for x in anchors if x["id"] == a.get("anchor_id")), None)
+                if hit and a.get("about"):
+                    hit["said"].append(a["about"])
+                print(
+                    f"   -> UPDATE {a.get('anchor_id')} about={a.get('about')!r} (object={a.get('object')})"
                 )
             else:
-                print(f"   -> {call.name} {json.dumps(call.args, ensure_ascii=False)[:120]}")
+                print(f"   -> {call.name} {json.dumps(a, ensure_ascii=False)[:120]}")
+    print("\n=== anchors ===")
+    for a in anchors:
+        print(f"{a['id']} {a['target']}\n     said: {a['said']}")
 
 
 if __name__ == "__main__":

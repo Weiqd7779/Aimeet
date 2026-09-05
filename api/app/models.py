@@ -12,6 +12,9 @@ def new_id() -> str:
 
 
 class GroundedEvent(BaseModel):
+    """One thing someone pointed at. Visual fields come from the frame it was found in;
+    `said` accumulates what speakers said about it across sentences."""
+
     id: str = Field(default_factory=new_id)
     ts: float
     speaker: str | None = None
@@ -20,6 +23,8 @@ class GroundedEvent(BaseModel):
     observation: str
     frame_id: str | None = None
     confidence: float = 0.0
+    said: list[str] = Field(default_factory=list)
+    mention_ids: list[str] = Field(default_factory=list)  # utterance ids that referred to it
 
 
 class TimeRange(BaseModel):

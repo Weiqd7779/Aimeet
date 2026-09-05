@@ -338,6 +338,7 @@ class LiveSessionManager:
             # speech span); otherwise pick the frame closest to the trigger.
             nearest = self._nearest_frame(trigger)
             frame_id = event.args.get("frame_id") or (nearest.id if nearest else None)
+            about = str(event.args.get("about") or "").strip()
             grounded = GroundedEvent(
                 ts=trigger,
                 speaker=speaker,
@@ -346,6 +347,8 @@ class LiveSessionManager:
                 observation=str(event.args.get("observation", "")),
                 frame_id=frame_id,
                 confidence=confidence,
+                said=[about] if about else [],
+                mention_ids=[source.id],
             )
             start = trigger - self.context_before_seconds
             visual_event = GroundedVisualEvent(
@@ -359,6 +362,30 @@ class LiveSessionManager:
                 {"status": "request_frame", "request_frame": True, "reason": "deictic"},
             )
             self.queue.put_nowait(VerifyJob(visual_event, grounded, event.utterance_id))
+        elif event.name == "update_anchor":
+            # The listen step decided this sentence is about an already-anchored thing.
+            source = self._utterance(event.utterance_id)
+            anchor = next(
+                (g for g in self.session.grounded_events if g.id == event.args.get("anchor_id")),
+                None,
+            )
+            if anchor is None or source is None:
+                # Unknown reference (model invented an id, or it was merged away): treat as
+                # a fresh pointing so the vision step can still find it next time.
+                self.recorder.note(
+                    "anchor_ref_unknown",
+                    {"utterance_id": event.utterance_id, "args": event.args},
+                )
+                return
+            about = str(event.args.get("about") or "").strip()
+            if about:
+                _extend_unique(anchor.said, [about])
+            if source.id not in anchor.mention_ids:
+                anchor.mention_ids.append(source.id)
+            anchor.utterance = source.text
+            anchor.ts = event.ts or self._elapsed()
+            self.recorder.link(event.utterance_id, "create_anchor", anchor.id)
+            await self._emit("grounded_event", anchor.model_dump())
         elif event.name == "not_visible":
             # Speaker pointed at something the frames do not show. Kept on record (the
             # report can mention it) but never shown as an anchor.
@@ -511,20 +538,26 @@ class LiveSessionManager:
             await self._try_emit("alert", alert.model_dump())
 
     def _merge_anchor(self, fresh: GroundedEvent) -> GroundedEvent:
-        """The same object described across consecutive sentences is one anchor: update
-        the existing one (target/observation/frame may get better) instead of stacking."""
+        """Safety net under the model's referent judgement: if it said "new thing" but the
+        vision step describes the same object it just described (same speaker, seconds
+        apart, near-identical observation), it is the same anchor."""
         for existing in reversed(self.session.grounded_events):
             if fresh.ts - existing.ts > ANCHOR_MERGE_SECONDS:
                 break
-            same_frame = existing.frame_id == fresh.frame_id
-            same_target = fuzz.partial_ratio(existing.target, fresh.target) >= 70
-            if existing.speaker == fresh.speaker and (same_frame or same_target):
+            same_look = fuzz.token_set_ratio(existing.observation, fresh.observation) >= 60
+            same_name = fuzz.partial_ratio(existing.target, fresh.target) >= 80
+            if existing.speaker == fresh.speaker and (same_look or same_name):
                 existing.ts = fresh.ts
                 existing.utterance = fresh.utterance
-                existing.target = fresh.target
-                existing.observation = fresh.observation
-                existing.frame_id = fresh.frame_id
-                existing.confidence = max(existing.confidence, fresh.confidence)
+                if fresh.confidence >= existing.confidence:
+                    existing.target = fresh.target
+                    existing.observation = fresh.observation
+                    existing.frame_id = fresh.frame_id
+                    existing.confidence = fresh.confidence
+                _extend_unique(existing.said, fresh.said)
+                existing.mention_ids.extend(
+                    m for m in fresh.mention_ids if m not in existing.mention_ids
+                )
                 return existing
         self.session.grounded_events.append(fresh)
         return fresh
@@ -535,7 +568,8 @@ class LiveSessionManager:
             for d in self.session.decision_state.decisions
         ]
         lines += [
-            f"- anchor@{g.ts:.0f}s {g.speaker}: {g.target}"
+            f"- anchor id={g.id} @{g.ts:.0f}s {g.speaker} 指的是「{g.target}」"
+            + (f"；已記錄：{'；'.join(g.said)}" if g.said else "")
             for g in self.session.grounded_events[-3:]
         ]
         lines += [

@@ -5,7 +5,7 @@ LOOK_TOOL_DEFINITIONS: list[dict] = [
         "name": "look_at_screen",
         "description": (
             "發言者正在指畫面上的某個東西（這個、那個、右邊這張表、鏡頭前的樣品…）。"
-            "說出他「所指／所稱」的東西，系統會去這句話說出期間的畫面裡找它。"
+            "先判斷他指的是「已錨定清單」裡的哪一個，還是新的東西；再說出這句話對它講了什麼。"
         ),
         "parameters": {
             "type": "object",
@@ -14,8 +14,19 @@ LOOK_TOOL_DEFINITIONS: list[dict] = [
                     "type": "string",
                     "description": "用說話者自己的稱呼（例如「指甲剪」「貓咪杯子」「右邊的長條圖」）；不知道名稱就寫「手上拿的東西」",
                 },
+                "refers_to": {
+                    "type": ["string", "null"],
+                    "description": "若指的就是已錨定清單中的某一個，填該 anchor 的 id；新的東西填 null。"
+                    "接著上一句繼續講同一個東西（「這個東西之後會推出」）通常是同一個；"
+                    "說「另一個」「這兩個」「換一個」才是新的。",
+                },
+                "about": {
+                    "type": "string",
+                    "description": "這句話對該物件說了什麼有用資訊（用途、定位、日期、數字、問題）。"
+                    "只寫這句新增的，沒有就填空字串。",
+                },
             },
-            "required": ["object"],
+            "required": ["object", "refers_to", "about"],
         },
     },
 ]
