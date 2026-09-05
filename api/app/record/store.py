@@ -37,6 +37,7 @@ TOOL_LINKS = {
     "create_anchor": "grounded_event_ids",
     "propose_decision": "decision_ids",
     "notify_speaker": "alert_ids",
+    "flag_inconsistency": "alert_ids",
 }
 
 

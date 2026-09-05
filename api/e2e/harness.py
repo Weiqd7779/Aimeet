@@ -72,6 +72,7 @@ class RunResult:
     report: dict[str, Any] | None = None
     record: dict[str, Any] | None = None
     cover_frames_ok: dict[str, bool] = field(default_factory=dict)  # scene cover -> GET 200
+    speech_files: list[str] = field(default_factory=list)  # rendered reminder voices on disk
     duration: float = 0.0
 
     def payloads(self, event_type: str) -> list[dict[str, Any]]:
@@ -343,5 +344,24 @@ async def run_scenario(scenario: Scenario) -> RunResult:
                     f"/sessions/{session_id}/frames/{scene['cover_frame_id']}.jpg"
                 )
                 result.cover_frames_ok[scene["id"]] = cover.status_code == 200
+    result.speech_files = _save_speech(scenario.id, session_id, result.events)
     result.duration = time.monotonic() - started
     return result
+
+
+def _save_speech(scenario_id: str, session_id: str, events: list[dict[str, Any]]) -> list[str]:
+    """Write every spoken reminder to e2e/results/speech/ so a human can listen to it."""
+    folder = Path(__file__).with_name("results") / "speech"
+    saved: list[str] = []
+    for index, event in enumerate(e for e in events if e["type"] == "speech"):
+        payload = event["payload"]
+        if not payload.get("audio_b64"):
+            continue
+        folder.mkdir(parents=True, exist_ok=True)
+        ext = {"audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/wav": "wav"}.get(
+            payload.get("mime", ""), "bin"
+        )
+        path = folder / f"{scenario_id}_{session_id[:8]}_{index + 1}.{ext}"
+        path.write_bytes(base64.b64decode(payload["audio_b64"]))
+        saved.append(str(path.relative_to(Path(__file__).parent)))
+    return saved
