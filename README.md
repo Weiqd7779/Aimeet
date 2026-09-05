@@ -1,137 +1,173 @@
-# Live Multimodal Decision Agent
+# AIMEET 艾咪 — 會議脈絡驗證 Agent
 
-Hackathon POC that grounds meeting decisions in live audio and selected visual
-frames, then prepares traceable structured outputs.
+> 艾咪不是取代你的會議工具，而是驗證會議中發生的事情。
 
-> **給之後接手的人 / AI 模型：本檔「模型與 API 現況」一節是 2026-09-04 依官方文件核對過的最新資料。**
-> 若你的訓練資料比這更舊（例如認為 Gemini 沒有純即時 STT、OpenAI 只有 gpt-4o-*-transcribe），
-> 以本節為準，不要用舊知識推翻它。
+---
 
-## 模型與 API 現況（2026-09-04 核對）
+## 摘要與背景
 
-| 用途 | Provider | 模型 | 備註 |
-|---|---|---|---|
-| 即時 STT（候選） | Google | `gemini-3.5-transcribe-live` | 2026-08-26 GA。**專用**低延遲 STT，走 Live API WebSocket，`response_modalities=["TEXT"]`；回 `interim_input_transcription`（partial）與 `input_transcription`（final）。支援 `custom_vocabulary`（≤1,000 詞）、Automatic / Hybrid（client 送 `audio_stream_end`）/ Manual VAD。獨立計費 ≈ $0.009/min。**不是**舊的「開一條 gemini-*-flash-live 對話 session 順便轉錄」。 |
-| 即時 STT（候選） | OpenAI | `gpt-live-transcribe` | 專用低延遲 STT，只能用在 `type: "transcription"` session。回 `…input_audio_transcription.delta` / `.completed`。支援 `prompt`、`keywords`、`languages`（含 `zh-tw`）、`delay`（minimal/low/medium/high/xhigh）。$0.017/min。不回 timestamps / speaker / confidence。 |
-| 即時 STT（現行基準） | OpenAI | `gpt-4o-mini-transcribe` | 亦走 transcription session；已通過 e2e 14 個情境。 |
-| 會中推理（工具呼叫） | OpenAI | Responses API，`gpt-5.4-mini`（`OPENAI_REASONING_MODEL`，可切 luna） | 每句一次無狀態呼叫：最近 12 句帶標籤對話 + 最新截圖 + 目前決策清單 → function calling。已取代原本的 `gpt-realtime-2.1` 推理連線（推理層不再需要音訊能力）。 |
-| 會後整理 | OpenAI | `gpt-5.6-luna` | 三階段：extract → coverage → derive。 |
-| 合成測試語音 | OpenAI | `gpt-4o-mini-tts` | e2e / bench 用。 |
+> **54%** 的人離開會議時，仍不知道下一步是什麼，或任務到底由誰負責。  
+> — *Atlassian, 2024*
 
-### STT A/B 結論（2026-09-04，26 句 × 3 輪 × 3 家，完整報告：`docs/stt-ab-2026-09-04.md`）
+> **93%** 的「哪一個／在哪裡」回答都伴隨著指向手勢——但今天的會議紀錄，只記得你說了什麼。  
+> — *University of Chicago, Frontiers in Communication*
 
-| Provider | CER | 術語 recall | 繁體率 | Partial p50 | Final p50 | $/min |
-|---|---|---|---|---|---|---|
-| gemini-3.5-transcribe-live | 2.4% | 100% | 27% | 0.86s | 1.34s | 0.009 |
-| gpt-live-transcribe | 3.4% | 99% | 32% | 1.30s | 0.84s（client commit） | 0.017 |
-| **gpt-4o-mini-transcribe（預設）** | **1.5%** | 100% | **100%** | 3.05s | 1.22s | **0.003** |
+AIMEET 將語音、手勢、視覺情境與會議記憶整合在一起，不只理解「說了什麼」，更理解「實際指的是什麼、誰要負責什麼」。  
+當負責人、截止日期或決策內容與先前討論發生衝突時，AIMEET 會在錯誤被寫進待辦事項之前主動偵測並即時提醒。
 
-**POC 預設維持 `gpt-4o-mini-transcribe`**：CER 最低、數字/時程零漏、唯一原生繁體、最便宜、不需額外 VAD。
-- Gemini 會漏數字（「三十秒改成十五秒」→「調整成 15 秒」，三輪皆然）、輸出簡體、session 上限 10 分鐘；partial 最快，若日後要做即時字幕可切換並加 `opencc s2t`。
-- gpt-live-transcribe 有英文幻聽（「OAuth 的」→「Oh, after」）、指定 `zh-tw` 仍多簡體、不支援 server VAD（需自己 commit 句尾）。
-- 語料為 TTS 合成；真人口音尚未驗證。
+---
 
-## 架構
+## 為什麼需要 AIMEET？
 
-```
-瀏覽器 (Next.js)
- ├─ getUserMedia   → 我的麥克風（echoCancellation）        ┐ 各自切 100ms PCM16
- └─ getDisplayMedia→ Meet 分頁音訊 + 畫面                  ┘ source = "me" | "remote"
-        │ WebSocket {audio, source} / {frame}
-        ▼
-FastAPI LiveSessionManager (api/app/live/session.py)
- ├─ 轉錄連線 me      ─┐ 兩人各自獨立通道、獨立 VAD → 不混音、歸屬不會錯
- ├─ 轉錄連線 remote  ─┘ 逐字稿 ts = 開口時間 (speech_started)
- ├─ EchoFilter (live/echo.py)  開喇叭時與會者的話從麥克風漏回：me 句與 4s 內 remote 句相似即丟棄
- ├─ 每 2 秒一張截圖 + 聽到指示語加拍一張 → 全部落地、伺服器時鐘蓋 ts（拍了不代表會用）
- └─ Reasoner (Responses API)  每句轉錄完成後兩步（不追即時）：
-      A 聽：純文字，近 12 句 + 決策/錨點狀態 → 決策/提醒；有指涉就叫 look_at_screen(物件名)
-      B 看：只在 A 要求時，撈「開口→收口」區間內的截圖（最多 3 張，找不到往前 10s 再找）
-           → create_anchor(frame_index) 或 not_visible
-      session 層守門：anchor 要視覺信心 ≥0.6，且（除非信心 ≥0.8）句子要有指示語 + 是完整句；
-      同物件 15s 內更新不新增；決策要有拍板詞；同主題合併、理由語意去重
- └─ ConsistencyAgent (app/consistency.py)  與 Reasoner 平行、每句一次（只在句子含時間詞或指派詞時叫模型）：
-      維護「承諾帳本」（事／人／時間），最新一句和帳本矛盾 → Inconsistency（time | assignee）
-      明講「改成／更正／延到」= 更新不算衝突；問句／確認句不算
-      → Alert(kind=inconsistency, detail=「事：X｜人：Y｜時間：A → B」, evidence=[先前原話, 現在原話])
-      → app/tts.py 呼叫 ElevenLabs（eleven_v3、自製聲音 IVY）合成口語提醒 → WS `speech` 事件（mp3 base64）
-      靜默提醒 = 只有這種（ALERTS_INCONSISTENCY_ONLY=true）；知識庫衝突 / 投影片提醒仍記錄但不顯示
-        ▼
-Recorder (api/app/record/store.py)  write-first、append-only
- data/sessions/{id}/events.jsonl   事件流（source of truth）
- data/sessions/{id}/record.json    aimeet.record.v1 快照（給搜尋 / RAG）
- data/sessions/{id}/record.md      給人看
- data/sessions/{id}/frames/*.jpg   每張截圖落地
- data/sessions/{id}/report.json    會後報告
- SceneTracker (record/scenes.py)   截圖 dHash 分「頁」；每句記 scene_id (+ 邊界 ±4s 的 adjacent)
-        ▼  Generate Report（API 重啟後 sessions 從硬碟重建）
-Synthesis (api/app/synthesis/)  luna：extract → coverage → derive(Mermaid/PRD/Work items) ∥ scene index
-                                輸入含 pages（依頁重排的內容，邊界句列在兩頁）；輸出含每頁 title/summary
-```
+### 核心痛點
+1. **會議脈絡容易遺失**：像「這個交給 Amy」這類語句，傳統逐字稿無法辨識「這個」實際對應到畫面上的哪一個白板內容、架構物件或介面流程。
+2. **決策衝突被直接記錄成錯誤待辦**：當負責人、截止日期或決策內容前後矛盾時，現有工具多半只負責被動記錄與摘要，缺乏會中的即時比對與驗證機制。
 
-設計原則：資訊不能掉、說話者不能錯；逐字稿切幾行不重要（讀取端合併同人連續片段）；
-JSON 是唯一真相、MD 是衍生品；原始片段不改寫。
+### 解決方案
+1. **多模態脈絡綁定 (Visual Grounding)**：結合雙軌語音與伺服器端畫面時間對齊，精確解析「誰說了什麼、指了什麼、誰要負責什麼」。
+2. **即時決策驗證 (Consistency Agent)**：主動偵測衝突，並透過語音與介面在錯誤成為定案前即時提醒。
 
-兩層畫面連結：**scene（頁）** 每句都有、不需要有人指東西、容許翻頁前後幾秒重疊 → 回答「講成本那頁在講什麼」；
-**anchor** 只在有人指畫面（「右邊這張表」）時建立 → 回答「他說的『那個』是什麼」。
-模型的 confidence 不能當 anchor 放行條件（實測十句對話會出 12 個），指示語是硬條件。
+---
 
-**時間對齊是 grounding 的核心**：語音的開口/收口（`speech_started/stopped.audio_*_ms`）與截圖都在伺服器時鐘上；
-「這個是貓咪杯子」的逐字稿晚 8 秒才到，但系統會回頭撈開口當下的那幾張圖，讓視覺去找語音講的那個名字
-（「指甲剪」），而不是拿最新一張圖硬猜。實機錄音重放：`uv run python -m e2e.replay <session_id>`。
-
-## Run locally
-
-需求：Python ≥ 3.11 + [uv](https://docs.astral.sh/uv/)、Node.js ≥ 20、Windows PowerShell（dev 腳本）、Chrome/Edge（getDisplayMedia）。
-
-```powershell
-git clone https://github.com/Weiqd7779/Aimeet.git; cd Aimeet
-Copy-Item .env.example api\.env   # 填 OPENAI_API_KEY（必要）、ELEVENLABS_API_KEY（要語音提醒才需要）
-                                  # 並把 MOCK_MODE 改成 false、LIVE_PROVIDER=openai
-cd api; uv sync; cd ..            # 依 uv.lock 建 .venv
-cd web; npm ci; cd ..             # 依 package-lock.json
-.\dev.ps1                         # 一鍵：殺掉舊的 → 開兩個視窗跑 API(:8000) + Web(:3000)
-.\dev.ps1 -Stop                   # 全部停掉
-```
-
-單獨啟動：`make dev-api` / `make dev-web`（各自的 dev.ps1）；`make restart` 只殺不起。
-
-**沒有 OPENAI_API_KEY 也能看 UI**：保留 `MOCK_MODE=true`，開始會議後會重播 `api/app/live/mock_script.json`。
-沒有 `ELEVENLABS_API_KEY` 時提醒卡片照出，只是不出聲。
-
-**Windows 上不要直接跑 `uvicorn` / `next dev`。** 只殺 reloader 父進程會留下 worker 繼續佔 port；
-新起的 server 綁得上但連線全被孤兒接走，跑的是它當初載入的舊程式碼。我們曾因此對著一個 20 分鐘前的
-worker debug「prompt 修了怎麼還洩漏」。`dev.ps1` 啟動前清、Ctrl+C 後再清一次。
-
-API at http://localhost:8000. `GET /health` 應回 `live_provider: openai`。
-
-## 測試
-
-| 指令 | 內容 |
+## 使用場景與功能展示
+ 
+**場景**：線上產品會議。主持人一邊分享畫面、一邊拿起實體原型講解陸續補充時程與分工。
+ 
+Aimeet 掛在會議旁邊：
+ 
+| 在會議裡… | Aimeet 當下… |
 |---|---|
-| `cd api && uv run pytest` | 離線單元測試（mock 引擎、Recorder 一致性、衝突 agent 規則、錨定門檻） |
-| `make e2e` / `uv run python -m e2e.run A4 D2` | 對**運行中的 API** 跑實際使用驗收（TTS 模擬兩位說話者 + 合成畫面 + 合成喇叭回音 → 硬規則 + LLM 裁判），報告在 `api/e2e/results/` |
-| `uv run python -m e2e.run B6` | 前後矛盾情境：需 `ELEVENLABS_API_KEY`；驗證 inconsistency 提醒 + 語音真的有合成，mp3 存到 `api/e2e/results/speech/` 可直接聽 |
-| `uv run python -m e2e.calibrate` | 裁判校準：故意弄壞（speaker 對調 / 少數字 / 少一句）必須被判 FAIL |
-| `uv run python -m bench.stt` | STT A/B benchmark，結果在 `api/bench/results/` |
+| 拿出一顆白綠色小球說：「這個……我們最新的產品，寶寶球」 | 從鏡頭畫面即時認出手上拿的實體物體，自動**截圖 + 辨識特徵 + 綁定上下文**，在左側生成一張「01 · 會議焦點物件」卡（`鏡頭前方、左手拿著的白綠色小圓形物件`）。 |
+| 先說「原型主要由 **Ivy** 負責，星期五以前交最終定稿」；會議尾聲又說「提醒一下 **Jack**，寶寶球最終定稿星期五以前交給我」 | 立即抓到前後負責人矛盾，啟動 AI 語音助理 IVY 即時插話提醒：<br>「**嗯，提醒一下，寶寶球原型定稿剛才是 Ivy 負責，現在聽到的是 Jack。要不要確認一下最後由誰負責？**」 |
+| 立刻反應澄清說：「**喔抱歉！是 Ivy，剛剛口誤了**」 | 理解發言者的口誤修正，自動確認最終責任歸屬，不產生誤判與干擾。 |
+| 會議進行與結束（點擊「**產生報告**」） | 將會議中的視覺實體焦點（寶寶球截圖與脈絡）、負責人決策修正歷程（Ivy / Jack）、逐字稿一併結構化彙整為正式會議結論、待辦事項與報告。 |
 
-真人錄音：放到 `api/e2e/audio/<name>.wav`（16-bit PCM，任何取樣率），scenario step 用 `"clip": "<name>"` 取代 `say`。
+## 系統架構
 
-驗收標準與已知限制見 `TEST_PLAN.md`。
+```mermaid
+flowchart LR
+  subgraph IN["輸入（瀏覽器）"]
+    A["🎙 我的麥克風"]
+    B["🖥 會議分頁<br/>聲音 + 畫面"]
+  end
 
-## Environment variables
+  subgraph CORE["後端核心（FastAPI）"]
+    STT["兩路獨立轉錄<br/>我 / 與會者 "]
+    subgraph AGENTS["兩個 Agent，各管一件事"]
+      R["Agent 1 · 統整決策、物件"]
+      C["Agent 2 · 抓衝突時間 / 負責人矛盾"]
+    end
+    REC["會議紀錄<br/>逐字稿 · 截圖 · 事件<br/>"]
+  end
 
-- `OPENAI_API_KEY`: 必要
-- `GEMINI_API_KEY`: STT bench / Gemini 轉錯層需要
-- `OPENAI_TRANSCRIBE_MODEL`: 轉錄模型（default: `gpt-4o-mini-transcribe`）
-- `OPENAI_REASONING_MODEL`: 會中推理（default: `gpt-5.4-mini`）
-- `OPENAI_MODEL` / `OPENAI_MODEL_COMPLEX`: 會後整理（default: `gpt-5.6-luna`）
-- `MOCK_MODE`: `true` 時完全不聽音訊，只重播 `mock_script.json`
-- `LIVE_PROVIDER`: `openai` | `mock`（`gemini` 為 legacy 單連線混音架構，不建議）
-- `SYNTHESIS_MOCK`: 強制 mock 報告
-- `RECORD_DIR`: 紀錄落地目錄（default: `data/sessions`）
-- `ELEVENLABS_API_KEY`: 語音提醒；空白則只有卡片不出聲
-- `ELEVENLABS_VOICE_ID`: 聲音（default: `1ulrCnnL9y7FtQmCz2nP` = 自製 clone「IVY」；`GET /v1/voices` 可列出帳號內所有聲音）
-- `ELEVENLABS_MODEL`: `eleven_v3`（支援 `[clears throat]` 等 audio tags、最像人、約 6–9s 延遲）或 `eleven_flash_v2_5`（<1s、1.15x 語速、tags 會自動拿掉）
-- `ALERTS_INCONSISTENCY_ONLY`: `true`（default）靜默提醒只保留時間／負責人不一致；`false` 恢復知識庫衝突與投影片提醒
-- `CONSISTENCY_ENABLED`: `false` 可整個關掉衝突 agent
+  subgraph OUT["輸出"]
+    UI["即時畫面<br/>焦點物件 · AI 統整"]
+    VOICE["🔊 語音提醒<br/>ElevenLabs · IVY"]
+    REP["會後報告<br/>決策表 · PRD · 待辦"]
+  end
+
+  A --> STT
+  B --> STT
+  STT --> R
+  STT --> C
+  B -- 截圖 --> R
+  R --> UI
+  C --> UI
+  C --> VOICE
+  R --> REC
+  C --> REC
+  STT --> REC
+  REC --> REP
+```
+## 使用技術
+
+| 類型 | 技術／服務 | 用途 |
+| --- | --- | --- |
+| AI 模型 | OpenAI `gpt-4o-mini-transcribe` | 即時語音轉錄 (STT)，原生繁體中文識別與低錯誤率 |
+| AI 模型 | OpenAI `gpt-5.4-mini` (Responses API) | 會中即時推理、工具呼叫與視覺指涉判定 |
+| AI 模型 | OpenAI `gpt-5.6-luna` | 會後多階段資訊萃取、覆蓋率檢查與報告合成 |
+| AI 模型 | ElevenLabs (`eleven_v3` / IVY) | 會中即時口語衝突提醒語音合成 (TTS) |
+| 前端 | Next.js 14, React, TypeScript, Tailwind CSS | 即時會議介面、音訊雙軌擷取 (`getUserMedia` / `getDisplayMedia`) |
+| 後端 | Python 3.11+, FastAPI, WebSockets, uv | 雙軌音訊串流管理、回音過濾 (EchoFilter)、事件流持久化 |
+
+---
+## 安裝與執行
+ 
+### 需求
+- Windows 10/11（啟動腳本是 PowerShell；macOS / Linux 見下方手動啟動）
+- Python 3.11+ 與 [uv](https://docs.astral.sh/uv/)
+- Node.js 20+
+- Chrome 或 Edge（需要 `getDisplayMedia` 分享畫面 + 分頁音訊）
+- OpenAI API key（必要）；ElevenLabs API key（要語音提醒才需要）
+ 
+### 安裝
+ 
+```powershell
+git clone https://github.com/Weiqd7779/Aimeet.git
+cd Aimeet
+cd api;  uv sync;  cd ..      # 依 uv.lock 建立 .venv
+cd web;  npm ci;   cd ..      # 依 package-lock.json 安裝
+Copy-Item .env.example api\.env
+```
+### 編輯 api\.env
+```ini
+OPENAI_API_KEY=sk-...
+MOCK_MODE=false
+LIVE_PROVIDER=openai
+ELEVENLABS_API_KEY=sk_...     # 可留空：提醒卡片照出，只是不出聲
+```
+### 執行
+```powershell
+.\dev.ps1          # 啟動 / 重啟：清掉舊程序後開兩個視窗 → API :8000、Web :3000
+.\dev.ps1 -Stop    # 全部停掉
+```
+打開 http://localhost:3000 → 開始會議 → 選要分享的分頁（勾「分享分頁音訊」）→ 允許麥克風。 http://localhost:8000/health 應回 {"status":"ok","live_provider":"openai"}。
+
+
+## 作品展示
+
+- 作品展示網址（選填）：
+- 評選影片：https://youtu.be/27ZzpMc-uB0
+
+## 限制與未來工作
+
+| 面向 | 限制 | 現況處理 |
+|---|---|---|
+| 提醒延遲 | 從說出矛盾到聽見語音約 8–12 秒 | 可換 `eleven_flash_v2_5`（<1 秒）但失去語氣標記 |
+| 衝突範圍 | 只抓「時間」與「負責人」兩種矛盾；金額、規格、範圍變更不在本版 | 帳本結構已預留 `task` 欄位可擴充 |
+| 說話者 | 只有兩路：「我」與「與會者」。遠端多人會全部歸為「與會者」，無法分辨誰說的 | 兩路獨立轉錄保證「我 / 對方」不會錯 |
+| 相對日期 | 「下星期三」換算成日期依會議當天推算，跨週／口誤時可能算錯 | 報告會把無法對回逐字稿的日期列進「不確定事項」 |
+| 回音 | 開喇叭時與會者聲音漏回麥克風，靠文字相似度在 4 秒內去重，非聲學消除 | 建議 demo 戴耳機 |
+| 平台 | 啟動腳本為 Windows PowerShell；macOS / Linux 需手動起 uvicorn 與 next | README 附手動指令 |
+| 儲存 | 檔案系統落地，無資料庫、無使用者、無權限；多場會議只靠資料夾隔離 | 事實資料已使用結構化 json 儲存，可日後匯入資料庫 |
+
+### 後續發展方向
+1. **更多矛盾類型**：金額、數量、規格、範圍（「先做 A」→「先做 B」），以及跨會議的矛盾（今天說的和上週決議不同）
+2. **說話者分離**：遠端多人時用聲紋或會議平台 API 取得參與者名稱，帳本的「人」就能對到真人
+3. **持久化與多租戶**：record.json 匯入 Postgres + 向量索引，做跨會議搜尋與 RAG
+
+## 第三方服務、資料與素材
+ 
+### 外部服務（需自備帳號與金鑰）
+ 
+| 服務 | 用途 | 連結 | 授權 / 條款 |
+|---|---|---|---|
+| OpenAI API — `gpt-4o-mini-transcribe` | 即時語音轉文字（兩路獨立） | https://platform.openai.com/docs/guides/realtime-transcription | [OpenAI Terms of Use](https://openai.com/policies/terms-of-use)、[Usage Policies](https://openai.com/policies/usage-policies)；按量計費 |
+| OpenAI API — `gpt-5.4-mini` | 會中推理（決策、指涉、視覺定位） | https://platform.openai.com/docs/api-reference/responses | 同上 |
+| OpenAI API — `gpt-5.6-luna` | 抓衝突判斷、會後報告整理 | 同上 | 同上 |
+| OpenAI API — `gpt-4o-mini-tts` | 僅 e2e 測試：合成兩位模擬說話者 | https://platform.openai.com/docs/guides/text-to-speech | 同上 |
+| ElevenLabs API — `eleven_v3` | 提醒語音合成 | https://elevenlabs.io/docs/api-reference/text-to-speech/convert | [ElevenLabs Terms of Service](https://elevenlabs.io/terms-of-use)；按字元計費 |
+| ElevenLabs — 聲音「IVY」 | 提醒使用的聲音 | 帳號內 Instant Voice Clone | 由本專案成員以**本人聲音**建立，僅供本專案使用；不對外散布聲音模型 |
+| Google Gemini API | 僅 STT A/B benchmark（`bench/`），主流程未使用 | https://ai.google.dev/gemini-api/docs | [Gemini API Terms](https://ai.google.dev/gemini-api/terms) |
+
+，專案未使用任何外部圖片、音樂、資料集或第三方文字內容。
+
+## 團隊成員
+
+| 姓名 | 分工 |
+| Mumu | 程式開發、撰寫文稿 |
+| Ivy | 程式開發、製作簡報 |
+
+## License
+
+請在儲存庫根目錄加入明確的 `LICENSE` 檔案，並在此標示授權名稱。
