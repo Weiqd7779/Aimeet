@@ -22,22 +22,12 @@ from app.live.reasoner import Reasoner
 
 SPEAKER_LABELS = {"me": "我", "remote": "與會者"}
 NOISE_REDUCTION = {"me": "near_field", "remote": "far_field"}
-# The prompt should only describe the recording setting/context (OpenAI's docs:
-# "Use prompt to describe the recording or its setting"). It must not contain example
-# sentences, output instructions, or anything that looks like speech. Vocabulary hints
-# go to the separate EXPECTED_TERMS list used by the leak detector, not into the prompt.
+# The prompt only describes the recording setting (OpenAI's docs: "Use prompt to describe
+# the recording or its setting"). No example sentences, no output instructions, no
+# vocabulary list: everything that looks like speech in here has come back out as a fake
+# transcript at some point (see hallucination.py). Domain terms belong in `keywords`,
+# which gpt-4o-mini-transcribe does not support, so we go without.
 TRANSCRIPTION_PROMPT = "台灣繁體中文的產品會議對話，夾雜英文與技術詞彙。"
-EXPECTED_TERMS = [
-    "Prototype A",
-    "Prototype B",
-    "Prototype C",
-    "Q4",
-    "BOM",
-    "滿意度",
-    "握感",
-    "矽膠包覆",
-    "樣品",
-]
 
 
 class _Connection:
@@ -82,7 +72,6 @@ class OpenAIRealtimeEngine:
         self._transcribers: dict[str, _Connection] = {}
         self._echo = EchoFilter()
         self._energy = {source: EnergyTrack() for source in SPEAKER_LABELS}
-        self._terms = EXPECTED_TERMS
         self._remote_talking = False  # remote VAD: speech_started .. transcription.completed
         self._pending: set[asyncio.Task[None]] = set()
         self._started = time.monotonic()
@@ -166,10 +155,16 @@ class OpenAIRealtimeEngine:
                             speaker=speaker,
                             ended=ended if ended is not None else self._elapsed(),
                         )
-                        rejected = self._hallucination_reason(source, transcript)
-                        if rejected:
+                        transcript.peak_rms = self._energy[source].peak(
+                            transcript.ts, transcript.ended or self._elapsed()
+                        )
+                        # The only thing we refuse is the prompt itself coming back as
+                        # speech. Energy / vocabulary gates were removed: they rejected
+                        # real sentences (see hallucination.py). peak_rms is recorded so
+                        # a genuine silence hallucination can be diagnosed, not guessed.
+                        if looks_like_prompt(text, TRANSCRIPTION_PROMPT):
                             await self.events.put(
-                                Rejected(transcript.text, transcript.ts, speaker, rejected)
+                                Rejected(text, transcript.ts, speaker, "prompt text echoed back")
                             )
                             continue
                         if source == "remote":
@@ -184,14 +179,6 @@ class OpenAIRealtimeEngine:
             raise
         except Exception as exc:  # noqa: BLE001
             await self._fail(f"{speaker} transcription: {exc}")
-
-    def _hallucination_reason(self, source: str, transcript: Transcript) -> str | None:
-        if not self._energy[source].had_speech(transcript.ts, self._elapsed()):
-            peak = self._energy[source].peak(transcript.ts, self._elapsed())
-            return f"no speech energy (peak rms {peak:.0f})"
-        if looks_like_prompt(transcript.text, self._terms, TRANSCRIPTION_PROMPT):
-            return "prompt vocabulary regurgitated"
-        return None
 
     def _spawn(self, coro: Any) -> None:
         task = asyncio.create_task(coro)

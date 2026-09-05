@@ -14,6 +14,7 @@ class Transcript:
     speaker: str | None = None
     id: str = field(default_factory=_new_id)
     ended: float | None = None  # when the transcript completed (upper bound of the speech span)
+    peak_rms: float | None = None  # loudest mic level during the span; diagnostic only
 
 
 @dataclass
@@ -49,7 +50,7 @@ class EchoDropped:
 
 @dataclass
 class Rejected:
-    """A transcript discarded as an STT hallucination (no speech energy / prompt echo)."""
+    """A transcript discarded because it was the prompt text echoed back verbatim."""
 
     text: str
     ts: float

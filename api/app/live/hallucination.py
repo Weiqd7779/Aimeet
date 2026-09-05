@@ -1,13 +1,24 @@
-"""Reject transcripts the STT model made up.
+"""What the STT model made up, and what we do about it.
 
-Whisper-family transcribers, given a context prompt or term hints and audio with no clear
-speech (room noise, keyboard, someone far away), sometimes emit a fluent paragraph stitched
-from those words. Seen live: 234 characters of "我們討論了 Prototype A ... Redis cache layer
-... BOM 成本上限 ... 握感 矽膠包覆 ... Q4" while nobody said any of it. Two independent
-checks catch this:
+History, because every rule here was added after a live failure and most were later wrong:
 
-1. Energy: the audio window of the utterance never reached speech level.
-2. Vocabulary: the text is mostly the expected terms woven into one turn.
+- 2026-09-04: with a vocabulary list *inside* the transcription prompt, gpt-4o-mini-transcribe
+  emitted a 234-character paragraph stitched from those terms while nobody spoke. We added
+  an energy gate and a term-density gate.
+- 2026-09-05: the prompt gained an example sentence; the model transcribed that sentence
+  verbatim five times. Then, with the example removed but the term list still there, it
+  emitted the term list as a question. Meanwhile the energy gate rejected real short
+  sentences (「還沒喔」「好的好的」) because of a clock-window bug.
+
+The fix was never a better filter: it was following the API docs. `prompt` describes the
+recording setting and nothing else; no example speech, no instructions, no vocabulary.
+With nothing in the prompt to regurgitate, the gates only hurt, so they are gone.
+
+What remains:
+- `looks_like_prompt`: refuse an utterance that *is* the prompt sentence. Zero false
+  positives (nobody says the prompt out loud), keeps the one known leak shape impossible.
+- `EnergyTrack`: mic level per utterance, stored as `peak_rms` on the record for diagnosis.
+  It never decides anything.
 """
 
 import re
@@ -15,13 +26,6 @@ from collections import deque
 
 import numpy as np
 
-SPEECH_RMS = 300  # int16 RMS; quiet speech through AGC is > 800, room tone < 150
-# A real sentence about the product legitimately uses 3-4 vocabulary words
-# ("Prototype C 的滿意度中等，握感還沒解，兩週交樣品"); the fabricated paragraph used 8 in
-# 234 characters. Only paragraph-length + term-dense text is treated as regurgitation.
-MAX_PROMPT_TERMS = 6
-LONG_UTTERANCE_CHARS = 100  # one VAD turn of real speech is far shorter than this
-LONG_UTTERANCE_TERMS = 3
 HISTORY_SECONDS = 120.0
 
 
@@ -31,7 +35,7 @@ def rms(pcm16: bytes) -> float:
 
 
 class EnergyTrack:
-    """Per-source RMS timeline so a finished utterance can be checked against its audio."""
+    """Per-source RMS timeline so an utterance can be annotated with how loud the mic was."""
 
     def __init__(self) -> None:
         self._points: deque[tuple[float, float]] = deque()
@@ -41,12 +45,11 @@ class EnergyTrack:
         while self._points and elapsed - self._points[0][0] > HISTORY_SECONDS:
             self._points.popleft()
 
-    def peak(self, start: float, end: float) -> float:
+    def peak(self, start: float, end: float) -> float | None:
+        """Loudest level in [start, end] (±0.3 s); None when the window holds no samples,
+        which means our clock and the transcriber's disagree - not that it was silent."""
         window = [level for t, level in self._points if start - 0.3 <= t <= end + 0.3]
-        return max(window, default=0.0)
-
-    def had_speech(self, start: float, end: float) -> bool:
-        return not self._points or self.peak(start, end) >= SPEECH_RMS
+        return max(window) if window else None
 
 
 MIN_VERBATIM_CHARS = 6
@@ -57,16 +60,7 @@ def _bare(text: str) -> str:
     return _PUNCT.sub("", text).lower()
 
 
-def looks_like_prompt(text: str, terms: list[str], prompt: str = "") -> bool:
-    """True when the transcript is the model regurgitating hints instead of a person.
-
-    Verbatim: the whole utterance appears inside the context prompt (any fragment the model
-    echoed back). Dense: several distinct expected terms woven into one turn, which real
-    speech does not do."""
+def looks_like_prompt(text: str, prompt: str) -> bool:
+    """True when the utterance is a verbatim fragment of the context prompt."""
     bare = _bare(text)
-    if prompt and len(bare) >= MIN_VERBATIM_CHARS and bare in _bare(prompt):
-        return True
-    hits = {term for term in terms if term.lower() in text.lower()}
-    return len(hits) >= MAX_PROMPT_TERMS or (
-        len(text) > LONG_UTTERANCE_CHARS and len(hits) >= LONG_UTTERANCE_TERMS
-    )
+    return len(bare) >= MIN_VERBATIM_CHARS and bare in _bare(prompt)

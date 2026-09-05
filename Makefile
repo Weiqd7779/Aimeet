@@ -4,7 +4,7 @@ dev-web:
 	cd web && npm run dev
 
 dev-api:
-	cd api && uv run uvicorn app.main:app --reload --reload-dir app
+	cd api && powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1
 
 e2e:
 	cd api && uv run python -m e2e.run $(SCENARIOS)

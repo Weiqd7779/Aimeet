@@ -87,7 +87,13 @@ class Recorder:
         return scene
 
     def add_utterance(
-        self, *, id: str, ts: float, speaker: str | None, text: str
+        self,
+        *,
+        id: str,
+        ts: float,
+        speaker: str | None,
+        text: str,
+        peak_rms: float | None = None,
     ) -> UtteranceRecord:
         scene = self.scenes.scene_at(ts)
         record = UtteranceRecord(
@@ -98,6 +104,7 @@ class Recorder:
             wall_time=datetime.now(UTC),
             speaker=speaker,
             text=text,
+            peak_rms=None if peak_rms is None else round(peak_rms),
             frame_id=self.session.frames[-1].id if self.session.frames else None,
             scene_id=scene.id if scene else None,
             adjacent_scene_ids=self.scenes.adjacent(ts, scene),

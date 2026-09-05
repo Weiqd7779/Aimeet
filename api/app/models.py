@@ -117,6 +117,7 @@ class UtteranceRecord(BaseModel):
     frame_id: str | None = None
     scene_id: str | None = None
     adjacent_scene_ids: list[str] = Field(default_factory=list)
+    peak_rms: float | None = None  # mic level during the span (diagnostic, never a gate)
 
 
 class MeetingSession(BaseModel):
