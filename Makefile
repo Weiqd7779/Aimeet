@@ -1,4 +1,10 @@
-.PHONY: dev-web dev-api restart e2e lint
+.PHONY: setup dev dev-web dev-api restart e2e lint test
+
+setup:
+	./setup.sh
+
+dev: setup
+	($(MAKE) dev-api & $(MAKE) dev-web & wait)
 
 # Both dev targets go through dev.ps1: it kills whatever still holds the port (and, for the
 # API, any orphaned uvicorn worker of this checkout) before starting, and kills the tree it
@@ -19,3 +25,6 @@ e2e:
 lint:
 	cd web && npm run lint
 	cd api && uv run ruff check .
+
+test:
+	cd api && uv run pytest -q

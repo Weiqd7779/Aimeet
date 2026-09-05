@@ -4,6 +4,7 @@ import binascii
 import contextlib
 import logging
 import re
+from dataclasses import dataclass
 from datetime import timedelta, timezone
 from typing import Any
 
@@ -32,14 +33,39 @@ from app.models import (
     Decision,
     Frame,
     GroundedEvent,
+    GroundedVisualEvent,
     MeetingSession,
     ServerEvent,
+    TimeRange,
     TranscriptEntry,
 )
 from app.record.store import Recorder
+from app.storage import save_events, save_frame
 from app.tts import mime_type, speak
+from app.vision import verify_visual_reference
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class VerifyJob:
+    event: GroundedVisualEvent
+    anchor: GroundedEvent
+    utterance_id: str | None = None
+
+
+@dataclass
+class CloseJob:
+    event: GroundedVisualEvent
+
+
+@dataclass
+class ConflictJob:
+    decision: Decision
+    utterance_id: str | None = None
+
+
+ProcessingJob = VerifyJob | CloseJob | ConflictJob
 
 TAIPEI = timezone(timedelta(hours=8))
 
@@ -107,6 +133,14 @@ class LiveSessionManager:
         self.consistency = ConsistencyAgent() if settings.consistency_enabled else None
         self._consistency_tasks: set[asyncio.Task[None]] = set()
         self._started = asyncio.get_running_loop().time()
+        self.queue: asyncio.Queue[ProcessingJob] = asyncio.Queue()
+        self.context_before_seconds = settings.context_before_seconds
+        self.context_after_seconds = settings.context_after_seconds
+        self.buffer_seconds = settings.buffer_seconds
+        self.frame_wait_seconds = 0.0 if isinstance(self.engine, MockLiveEngine) else 2.0
+        self.drain_seconds = 10.0
+        self._worker: asyncio.Task[None] | None = None
+        self._timers: set[asyncio.Task[None]] = set()
         self._audio_chunks: dict[str, int] = {}
 
     def _elapsed(self) -> float:
@@ -116,6 +150,10 @@ class LiveSessionManager:
         event = ServerEvent(type=event_type, payload=payload)
         await self.websocket.send_json(event.model_dump(mode="json"))
 
+    async def _try_emit(self, event_type: str, payload: Any) -> None:
+        with contextlib.suppress(RuntimeError, WebSocketDisconnect):
+            await self._emit(event_type, payload)
+
     async def run(self) -> None:
         await self.websocket.accept()
         reader_task: asyncio.Task[Any] | None = None
@@ -123,6 +161,7 @@ class LiveSessionManager:
         reason = "unknown"
         try:
             await self.engine.start(self.session.id)
+            self._worker = asyncio.create_task(self._process_jobs())
             if reasoner := getattr(self.engine, "reasoner", None):
                 reasoner.context_provider = self._decision_context
             await self._emit("status", {"status": "connected", "session_id": self.session.id})
@@ -154,6 +193,8 @@ class LiveSessionManager:
             logger.exception("live session crashed")
             raise
         finally:
+            with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                await asyncio.wait_for(self.queue.join(), timeout=self.drain_seconds)
             self.recorder.note(
                 "closed",
                 {
@@ -163,7 +204,13 @@ class LiveSessionManager:
                     "frames": len(self.session.frames),
                 },
             )
-            for task in (reader_task, event_task, *self._consistency_tasks):
+            for task in (
+                reader_task,
+                event_task,
+                self._worker,
+                *self._timers,
+                *self._consistency_tasks,
+            ):
                 if task and not task.done():
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
@@ -194,7 +241,7 @@ class LiveSessionManager:
                     reason=message.get("reason", "manual"),
                 )
                 self.session.frames.append(frame)
-                del self.session.frames[:-200]
+                self._trim_buffers()
                 scene = self.recorder.add_frame(frame, jpeg_bytes)
                 await self.engine.send_frame(jpeg_bytes, frame_id=frame.id, ts=frame.ts)
                 await self._emit(
@@ -223,6 +270,7 @@ class LiveSessionManager:
                 id=event.id, ts=event.ts, speaker=event.speaker, text=event.text
             )
             self.session.transcript.append(transcript)
+            self._trim_buffers()
             self.recorder.add_utterance(
                 id=transcript.id,
                 ts=transcript.ts,
@@ -255,6 +303,23 @@ class LiveSessionManager:
             return event.status in {"script_complete", "disconnected"}
         return False
 
+    def _trim_buffers(self) -> None:
+        now = self._elapsed()
+        cutoff = now - self.buffer_seconds
+        self.session.transcript[:] = [
+            entry for entry in self.session.transcript if entry.ts >= cutoff
+        ]
+        self.session.frames[:] = [frame for frame in self.session.frames if frame.ts >= cutoff]
+        del self.session.frames[:-200]
+
+    def _nearest_frame(self, ts: float) -> Frame | None:
+        if not self.session.frames:
+            return None
+        return min(self.session.frames, key=lambda frame: abs(frame.ts - ts))
+
+    def _texts_between(self, start: float, end: float) -> list[str]:
+        return [entry.text for entry in self.session.transcript if start <= entry.ts <= end]
+
     def _utterance(self, utterance_id: str | None) -> TranscriptEntry | None:
         if utterance_id:
             for entry in reversed(self.session.transcript):
@@ -286,28 +351,37 @@ class LiveSessionManager:
                     {"utterance_id": source.id, "confidence": confidence, "args": event.args},
                 )
                 return
-            target = str(event.args.get("target", ""))
+            trigger = event.ts or self._elapsed()
+            speaker = event.args.get("speaker") or source.speaker
+            utterance = source.text
             # The vision step tells us which frame it actually looked at (aligned to the
-            # speech span); fall back to the latest frame only for the mock engine.
-            frame_id = event.args.get("frame_id") or (
-                self.session.frames[-1].id if self.session.frames else None
-            )
+            # speech span); otherwise pick the frame closest to the trigger.
+            nearest = self._nearest_frame(trigger)
+            frame_id = event.args.get("frame_id") or (nearest.id if nearest else None)
             about = str(event.args.get("about") or "").strip()
-            grounded = self._merge_anchor(
-                GroundedEvent(
-                    ts=event.ts or self._elapsed(),
-                    speaker=event.args.get("speaker") or source.speaker,
-                    utterance=source.text,
-                    target=target,
-                    observation=str(event.args.get("observation", "")),
-                    frame_id=frame_id,
-                    confidence=confidence,
-                    said=[about] if about else [],
-                    mention_ids=[source.id],
-                )
+            grounded = GroundedEvent(
+                ts=trigger,
+                speaker=speaker,
+                utterance=utterance,
+                target=str(event.args.get("target", "")),
+                observation=str(event.args.get("observation", "")),
+                frame_id=frame_id,
+                confidence=confidence,
+                said=[about] if about else [],
+                mention_ids=[source.id],
             )
-            self.recorder.link(event.utterance_id, "create_anchor", grounded.id)
-            await self._emit("grounded_event", grounded.model_dump())
+            start = trigger - self.context_before_seconds
+            visual_event = GroundedVisualEvent(
+                time_range=TimeRange(start=start, trigger=trigger),
+                trigger_text=utterance or str(event.args.get("observation", "")),
+                speaker=speaker,
+                context_before=self._texts_between(start, trigger),
+            )
+            await self._emit(
+                "status",
+                {"status": "request_frame", "request_frame": True, "reason": "deictic"},
+            )
+            self.queue.put_nowait(VerifyJob(visual_event, grounded, event.utterance_id))
         elif event.name == "update_anchor":
             # The listen step decided this sentence is about an already-anchored thing.
             source = self._utterance(event.utterance_id)
@@ -364,18 +438,12 @@ class LiveSessionManager:
                 [decision.chosen, *decision.alternatives],
             )
             _extend_unique(self.session.decision_state.constraints, decision.constraints)
-            alerts: list[Alert] = []
+            self.recorder.link(event.utterance_id, event.name, decision.id)
+            await self._emit("decision", decision.model_dump())
             if choice_changed and not settings.alerts_inconsistency_only:
                 # Only a new or changed choice can create a new conflict; re-checking the
                 # same choice every time someone restates it just stacks identical alerts.
-                hits = self.knowledge.search(f"{decision.topic} {decision.chosen}")
-                alerts = self._merge_alerts(decision, await check_conflict(decision, hits))
-            self.recorder.link(event.utterance_id, event.name, decision.id)
-            for alert in alerts:
-                self.recorder.link(event.utterance_id, "notify_speaker", alert.id)
-            await self._emit("decision", decision.model_dump())
-            for alert in alerts:
-                await self._emit("alert", alert.model_dump())
+                self.queue.put_nowait(ConflictJob(decision, event.utterance_id))
         elif event.name == "notify_speaker":
             if settings.alerts_inconsistency_only:
                 # Kept on record for the report, never surfaced as a silent reminder.
@@ -503,6 +571,95 @@ class LiveSessionManager:
         )
         self.session.alerts.append(alert)
         return alert
+
+    async def _process_jobs(self) -> None:
+        while True:
+            job = await self.queue.get()
+            try:
+                await self._process_job(job)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Processing job failed: %s", type(job).__name__)
+            finally:
+                self.queue.task_done()
+
+    async def _process_job(self, job: ProcessingJob) -> None:
+        if isinstance(job, VerifyJob):
+            await self._verify_event(job.event, job.anchor, job.utterance_id)
+        elif isinstance(job, CloseJob):
+            await self._close_event(job.event)
+        elif isinstance(job, ConflictJob):
+            await self._run_conflict_check(job.decision, job.utterance_id)
+
+    async def _wait_for_frame(self, trigger: float) -> Frame | None:
+        deadline = self._elapsed() + self.frame_wait_seconds
+        while self._elapsed() < deadline:
+            if any(frame.ts >= trigger for frame in self.session.frames):
+                break
+            await asyncio.sleep(0.05)
+        return self._nearest_frame(trigger)
+
+    async def _verify_event(
+        self,
+        event: GroundedVisualEvent,
+        anchor: GroundedEvent,
+        utterance_id: str | None = None,
+    ) -> None:
+        frame = await self._wait_for_frame(event.time_range.trigger)
+        context = [*event.context_before, event.trigger_text]
+        verdict = await verify_visual_reference(
+            event.trigger_text,
+            context,
+            frame.jpeg_b64 if frame else None,
+        )
+        if not verdict.is_grounded_visual_reference:
+            logger.info("Rejected visual reference: %s (%s)", event.trigger_text, verdict.reason)
+            return
+        if frame:
+            event.evidence_frame_ids = [frame.id]
+            anchor.frame_id = frame.id
+            save_frame(self.session.id, frame.id, frame.jpeg_b64)
+        anchor = self._merge_anchor(anchor)
+        if utterance_id:
+            self.recorder.link(utterance_id, "create_anchor", anchor.id)
+        await self._try_emit("grounded_event", anchor.model_dump())
+        event.lifecycle = "aggregating"
+        self.session.grounded_visual_events.append(event)
+        await self._try_emit("grounded_visual_event", event.model_dump())
+        timer = asyncio.create_task(self._schedule_close(event))
+        self._timers.add(timer)
+        timer.add_done_callback(self._timers.discard)
+
+    async def _schedule_close(self, event: GroundedVisualEvent) -> None:
+        await asyncio.sleep(self.context_after_seconds)
+        self.queue.put_nowait(CloseJob(event))
+
+    async def _close_event(self, event: GroundedVisualEvent) -> None:
+        end = event.time_range.trigger + self.context_after_seconds
+        event.time_range.end = end
+        event.context_after = [
+            entry.text
+            for entry in self.session.transcript
+            if event.time_range.trigger < entry.ts <= end
+        ]
+        event.lifecycle = "closed"
+        save_events(self.session.id, self.session.grounded_visual_events)
+        await self._try_emit("grounded_visual_event", event.model_dump())
+
+    async def _run_conflict_check(
+        self, decision: Decision, utterance_id: str | None = None
+    ) -> None:
+        hits = self.knowledge.search(f"{decision.topic} {decision.chosen}")
+        alerts = self._merge_alerts(decision, await check_conflict(decision, hits))
+        if not alerts:
+            return
+        if utterance_id:
+            for alert in alerts:
+                self.recorder.link(utterance_id, "notify_speaker", alert.id)
+        await self._try_emit("decision", decision.model_dump())
+        for alert in alerts:
+            await self._try_emit("alert", alert.model_dump())
 
     def _merge_anchor(self, fresh: GroundedEvent) -> GroundedEvent:
         """Safety net under the model's referent judgement: if it said "new thing" but the

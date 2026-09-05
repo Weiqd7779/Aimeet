@@ -123,6 +123,76 @@ ELEVENLABS_API_KEY=sk_...     # 可留空：提醒卡片照出，只是不出聲
 ```
 打開 http://localhost:3000 → 開始會議 → 選要分享的分頁（勾「分享分頁音訊」）→ 允許麥克風。 http://localhost:8000/health 應回 {"status":"ok","live_provider":"openai"}。
 
+### macOS / Linux
+
+```bash
+git clone https://github.com/Weiqd7779/Aimeet.git
+cd Aimeet
+make dev          # 自動跑 setup.sh（裝依賴、建 api/.env）後同時起 api 與 web
+make setup        # 只裝依賴不啟動
+make dev-api / make dev-web   # 分開兩個 terminal 跑；make restart 只殺不起
+```
+
+**Windows 上不要直接跑 `uvicorn` / `next dev`。** 只殺 reloader 父進程會留下 worker 繼續佔 port；
+新起的 server 綁得上但連線全被孤兒接走，跑的是它當初載入的舊程式碼。`dev.ps1` 啟動前清、Ctrl+C 後再清一次。
+
+**沒有 OPENAI_API_KEY 也能看 UI**：保留 `MOCK_MODE=true`，開始會議後會重播 `api/app/live/mock_script.json`。
+沒有 `ELEVENLABS_API_KEY` 時提醒卡片照出，只是不出聲。
+
+### 用 Google Meet 測試
+
+1. 另開分頁進入 Google Meet 會議，回到 web app 按「開始」。
+2. Chrome 的分享視窗選 **該 Meet 分頁**，並勾選 **「同時分享分頁音訊」**——
+   分頁音訊來自會議而非本機麥克風，所以觸發語句要由會議中的**其他參與者／另一台裝置**說出。
+3. 想快點看到事件 `closed`，在 `api/.env` 加 `CONTEXT_AFTER_SECONDS=5`。
+4. 證據會寫到 `api/data/session_{id}/events.json` 與 `api/data/session_{id}/frames/*.jpg`；
+   完整人工驗收步驟見 [`docs/e2e_google_meet_checklist.md`](docs/e2e_google_meet_checklist.md)。
+
+### 環境變數（`api/.env`）
+
+- `OPENAI_API_KEY`: 必要
+- `GEMINI_API_KEY`: STT bench / Gemini 轉錯層需要
+- `OPENAI_TRANSCRIBE_MODEL`: 轉錄模型（default: `gpt-4o-mini-transcribe`）
+- `OPENAI_REASONING_MODEL`: 會中推理（default: `gpt-5.4-mini`）
+- `OPENAI_MODEL` / `OPENAI_MODEL_COMPLEX`: 會後整理（default: `gpt-5.6-luna`）
+- `MOCK_MODE`: `true` 時完全不聽音訊，只重播 `mock_script.json`
+- `LIVE_PROVIDER`: `openai` | `mock`（`gemini` 為 legacy 單連線混音架構，不建議）
+- `SYNTHESIS_MOCK`: 強制 mock 報告
+- `RECORD_DIR`: 紀錄落地目錄（default: `data/sessions`）
+- `DATA_DIR`: Directory for persisted GroundedVisualEvents and evidence frames (default: `data`)
+- `CONTEXT_BEFORE_SECONDS` / `CONTEXT_AFTER_SECONDS`: Context window around a trigger (default: `20` / `30`)
+- `BUFFER_SECONDS`: In-memory transcript/frame ring buffer window (default: `60`)
+- `ELEVENLABS_API_KEY`: 語音提醒；空白則只有卡片不出聲
+- `ELEVENLABS_VOICE_ID`: 聲音（default: `1ulrCnnL9y7FtQmCz2nP` = 自製 clone「IVY」；`GET /v1/voices` 可列出帳號內所有聲音）
+- `ELEVENLABS_MODEL`: `eleven_v3`（支援 `[clears throat]` 等 audio tags、最像人、約 6–9s 延遲）或 `eleven_flash_v2_5`（<1s、1.15x 語速、tags 會自動拿掉）
+- `ALERTS_INCONSISTENCY_ONLY`: `true`（default）靜默提醒只保留時間／負責人不一致；`false` 恢復知識庫衝突與投影片提醒
+- `CONSISTENCY_ENABLED`: `false` 可整個關掉衝突 agent
+
+## GroundedVisualEvent pipeline
+
+單一 hypothesis：語音模型辨識「這句話需要看畫面」→ 正確時刻抓幀 → vision 驗證濾口頭禪
+→ 結合前後語境建立一筆 GroundedVisualEvent。
+
+- `create_anchor` 進來時建立 `triggered` 事件、主動要求前端擷取 `reason="deictic"` 的關鍵幀
+  （此幀繞過 Realtime 的 4 秒節流），並把重處理丟進單一 processing queue；音訊與影格轉發
+  永遠不被下游 LLM 呼叫阻塞。
+- 背景 worker 用 trigger 時間戳挑最接近的一幀做 vision 驗證，只有
+  `is_grounded_visual_reference == true` 才進 `aggregating`；口頭禪（「這件事回去再說」）被丟棄。
+- 約 30 秒後聚合 `context_after`，狀態轉 `closed`、填 `time_range.end`。
+- 持久資料只有事件與截圖：`data/session_{id}/events.json` 與
+  `data/session_{id}/frames/{frame_id}.jpg`（JSON 不含 base64）。原始 transcript 與 frame
+  只留最近約 60 秒的記憶體 ring buffer。
+- 真實 provider 模式以 LLM tool call 為唯一觸發路徑；前端與 `mock.py` 的 regex 只給 mock/離線 demo。
+
+## 驗收標準
+
+三層都通過才算 done，**只有 mock 綠燈不算 done**：
+
+1. Mock/單元（CI 必跑）：`cd api && uv run pytest -q`
+2. 真實 provider 整合（需 `OPENAI_API_KEY`，缺少時 skip）：
+   `cd api && uv run pytest -q -m integration`
+3. Google Meet E2E（人工，須附錄影、`events.json`、截圖、transcript log）：
+   見 [`docs/e2e_google_meet_checklist.md`](docs/e2e_google_meet_checklist.md)
 
 ## 作品展示
 

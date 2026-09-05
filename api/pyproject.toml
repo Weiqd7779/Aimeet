@@ -24,6 +24,7 @@ dependencies = [
 dev = [
     "ruff",
     "pytest",
+    "pytest-asyncio",
     "pillow>=12.3.0",
     "opencc-python-reimplemented>=0.1.7",
 ]
@@ -33,3 +34,6 @@ line-length = 100
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+asyncio_mode = "strict"
+addopts = "-m 'not integration'"
+markers = ["integration: hits real providers, requires OPENAI_API_KEY"]

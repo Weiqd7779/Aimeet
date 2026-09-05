@@ -32,6 +32,25 @@ export interface GroundedEvent {
   mention_ids?: string[];
 }
 
+export type EventLifecycle = "triggered" | "aggregating" | "closed";
+
+export interface TimeRange {
+  start: number;
+  trigger: number;
+  end: number | null;
+}
+
+export interface GroundedVisualEvent {
+  event_id: string;
+  time_range: TimeRange;
+  trigger_text: string;
+  speaker: string | null;
+  context_before: string[];
+  context_after: string[];
+  evidence_frame_ids: string[];
+  lifecycle: EventLifecycle;
+}
+
 export interface Alert {
   id: string;
   ts: number;
@@ -78,6 +97,7 @@ export interface MeetingSession {
   transcript: TranscriptEntry[];
   frames: Frame[];
   grounded_events: GroundedEvent[];
+  grounded_visual_events: GroundedVisualEvent[];
   alerts: Alert[];
   decision_state: DecisionState;
 }
@@ -85,6 +105,7 @@ export interface MeetingSession {
 export type ServerEventType =
   | "transcript"
   | "grounded_event"
+  | "grounded_visual_event"
   | "alert"
   | "decision"
   | "frame_ack"

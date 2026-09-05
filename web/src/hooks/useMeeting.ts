@@ -10,6 +10,7 @@ import type {
   Decision,
   Frame,
   GroundedEvent,
+  GroundedVisualEvent,
   ReportEnvelope,
   ServerEvent,
   SpeechEvent,
@@ -28,6 +29,7 @@ interface State {
   transcript: TranscriptEntry[];
   frames: Frame[];
   groundedEvents: GroundedEvent[];
+  visualEvents: GroundedVisualEvent[];
   alerts: Alert[];
   decisions: Decision[];
   toast: string | null;
@@ -50,6 +52,7 @@ const initialState: State = {
   transcript: [],
   frames: [],
   groundedEvents: [],
+  visualEvents: [],
   alerts: [],
   decisions: [],
   toast: null,
@@ -76,6 +79,12 @@ function reducer(state: State, action: Action): State {
   }
   if (event.type === "grounded_event") {
     return { ...state, groundedEvents: replaceById(state.groundedEvents, event.payload as GroundedEvent) };
+  }
+  if (event.type === "grounded_visual_event") {
+    const visualEvent = event.payload as GroundedVisualEvent;
+    const index = state.visualEvents.findIndex((current) => current.event_id === visualEvent.event_id);
+    if (index < 0) return { ...state, visualEvents: [...state.visualEvents, visualEvent] };
+    return { ...state, visualEvents: state.visualEvents.map((current, itemIndex) => (itemIndex === index ? visualEvent : current)) };
   }
   if (event.type === "alert") {
     return { ...state, alerts: replaceById(state.alerts, event.payload as Alert) };
@@ -116,6 +125,8 @@ export function useMeeting() {
   const streamRef = useRef<MediaStream | null>(null);
   const micRef = useRef<MediaStream | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mockRef = useRef(false);
+  const clockOriginRef = useRef(0);
   const speechRef = useRef<HTMLAudioElement | null>(null);
   const voiceRef = useRef(true);
   const [voiceEnabled, setVoiceEnabledState] = useState(true);
@@ -171,7 +182,10 @@ export function useMeeting() {
   useEffect(() => {
     fetch(`${apiUrl()}/health`)
       .then((response) => response.json())
-      .then((payload: { mock_mode?: boolean; live_provider?: string }) => dispatch({ type: "health", mockMode: Boolean(payload.mock_mode), liveProvider: payload.live_provider || "mock" }))
+      .then((payload: { mock_mode?: boolean; live_provider?: string }) => {
+        mockRef.current = Boolean(payload.mock_mode) || (payload.live_provider || "mock") === "mock";
+        dispatch({ type: "health", mockMode: Boolean(payload.mock_mode), liveProvider: payload.live_provider || "mock" });
+      })
       .catch(() => dispatch({ type: "toast", message: "無法連線至 API" }));
   }, []);
 
@@ -195,7 +209,7 @@ export function useMeeting() {
   const handleEvent = useCallback((event: ServerEvent) => {
     dispatch({ type: "event", event });
     if (event.type === "speech") playSpeech(event.payload as SpeechEvent);
-    if (event.type === "transcript") {
+    if (event.type === "transcript" && mockRef.current) {
       const transcript = event.payload as TranscriptEntry;
       if (/這個|那個|這裡|那裡|這邊|那邊|右邊|左邊|上面|下面|這塊|那張|這頁|螢幕|畫面|投影片|簡報|圖表|表格|\b(?:this|that|the)\s+(?:one|chart|table|slide|page|graph|diagram|screen)\b|\bon\s+(?:the\s+)?screen\b/i.test(transcript.text)) {
         samplerRef.current?.trigger("deictic");
@@ -203,7 +217,7 @@ export function useMeeting() {
     }
     if (event.type === "status") {
       const payload = event.payload as { request_frame?: boolean; reason?: string; status?: string };
-      if (payload.request_frame) samplerRef.current?.trigger("manual");
+      if (payload.request_frame) samplerRef.current?.trigger(payload.reason === "deictic" ? "deictic" : "manual");
       if (payload.status === "script_complete" || payload.status === "disconnected") {
         socketRef.current?.close();
       }
@@ -215,6 +229,7 @@ export function useMeeting() {
   const start = useCallback(async (mock: boolean, video: HTMLVideoElement | null) => {
     if (state.status === "connecting" || state.status === "live") return;
     dispatch({ type: "status", status: "connecting" });
+    mockRef.current = mock || state.mockMode;
     try {
       const response = await fetch(`${apiUrl()}/sessions`, { method: "POST" });
       if (!response.ok) throw new Error("建立 session 失敗");
@@ -223,7 +238,9 @@ export function useMeeting() {
       setStartedAt(Date.now());
       setElapsed(0);
       const socket = new LiveSocket(socketUrl(apiUrl(), id), handleEvent, (connected) => {
-        if (connected) dispatch({ type: "status", status: "live" });
+        if (!connected) return;
+        clockOriginRef.current = performance.now();
+        dispatch({ type: "status", status: "live" });
       });
       socketRef.current = socket;
       socket.connect();
@@ -235,7 +252,12 @@ export function useMeeting() {
         video.srcObject = stream;
         await video.play();
         samplerRef.current = new FrameSampler(video, (jpeg_b64, reason) =>
-          send({ type: "frame", jpeg_b64, reason, ts: performance.now() / 1000 }),
+          send({
+            type: "frame",
+            jpeg_b64,
+            reason,
+            ts: (performance.now() - clockOriginRef.current) / 1000,
+          }),
         );
         samplerRef.current.start();
         let mic: MediaStream | null = null;
@@ -261,7 +283,7 @@ export function useMeeting() {
       dispatch({ type: "status", status: "idle" });
       showToast(error instanceof Error ? error.message : "無法啟動會議");
     }
-  }, [cleanupMedia, handleEvent, send, showToast, state.status]);
+  }, [cleanupMedia, handleEvent, send, showToast, state.mockMode, state.status]);
 
   const end = useCallback(() => {
     send({ type: "end" });

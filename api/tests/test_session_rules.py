@@ -176,7 +176,9 @@ def test_anchor_merge_is_a_safety_net_for_same_looking_objects() -> None:
 def test_confident_look_overrides_text_gates_but_weak_look_does_not() -> None:
     """Session f9d3f01a: STT split 「就是這個，最新的智慧眼鏡…」 into a fragment and a sentence
     with no pointing word; vision saw the glasses at 0.92 / 0.84 both times and both were
-    dropped. A confident look must anchor; an uncertain one still needs the wording."""
+    dropped. A confident look must anchor; an uncertain one still needs the wording.
+    The anchor itself is only created once the queued vision check accepts it, so the
+    gates are observed as "did this reach the processing queue"."""
 
     async def anchor(text: str, confidence: float) -> int:
         manager = _manager()
@@ -198,7 +200,7 @@ def test_confident_look_overrides_text_gates_but_weak_look_does_not() -> None:
                 utterance_id=entry.id,
             )
         )
-        return len(manager.session.grounded_events)
+        return manager.queue.qsize()
 
     async def scenario() -> None:
         assert await anchor("啊,就是這個。", 0.92) == 1  # fragment, but vision is sure
