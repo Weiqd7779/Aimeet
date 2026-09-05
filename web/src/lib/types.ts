@@ -124,6 +124,16 @@ export interface KeyFact {
   ts: number | null;
   category: "number" | "date" | "person" | "constraint" | "requirement" | "action" | "other";
   resolved_date?: string | null;
+  topic?: string | null;
+}
+
+export interface Topic {
+  id: string;
+  title: string;
+  ts_start: number;
+  ts_end: number;
+  gist: string;
+  quotes: string[];
 }
 
 export interface ScenePage {
@@ -139,6 +149,7 @@ export interface ScenePage {
 
 export interface MeetingReport {
   summary: string;
+  topics?: Topic[];
   key_facts: KeyFact[];
   decision_table: DecisionRow[];
   mermaid: string;

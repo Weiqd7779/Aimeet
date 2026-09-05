@@ -33,16 +33,41 @@ class KeyFact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fact: str
-    quote: str = Field(..., description="逐字稿原句片段；fact 只能改寫這段，不能補上其中沒有的主詞")
+    quote: str = Field(
+        ...,
+        description="逐字稿原文片段，可跨多句；fact 只能改寫這段，不能補上其中沒有的主詞",
+    )
     speaker: str | None = Field(...)
     ts: float | None = Field(...)
     category: Literal["number", "date", "person", "constraint", "requirement", "action", "other"]
     resolved_date: str | None = Field(
         ..., description="若 fact 含日期/時程且可依會議日期換算，填 YYYY-MM-DD；否則 null"
     )
+    topic: str | None = Field(default=None, description="所屬主題段落的 id")
+
+
+class Topic(BaseModel):
+    """One thing the meeting talked about, as judged after reading the whole transcript."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., description="t1, t2, …")
+    title: str = Field(..., description="這段在講什麼，10 字內")
+    ts_start: float
+    ts_end: float
+    gist: str = Field(..., description="讀完整段後的一句話：誰/什麼/要怎樣，主詞要補齊")
+    quotes: list[str] = Field(..., description="構成這段的原文句子，照抄")
 
 
 # --- Pipeline stage outputs -------------------------------------------------
+
+
+class Segmentation(BaseModel):
+    """Stage 0: the whole transcript cut into topics by meaning, not by silence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    topics: list[Topic] = Field(...)
 
 
 class Extraction(BaseModel):
@@ -122,6 +147,7 @@ class MeetingReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     summary: str
+    topics: list[Topic] = Field(default_factory=list)
     key_facts: list[KeyFact] = Field(...)
     decision_table: list[DecisionRow] = Field(...)
     mermaid: str

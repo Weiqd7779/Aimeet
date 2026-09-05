@@ -2,8 +2,11 @@
 
 Live transcription yields fragments (one speaker's sentence may arrive as several lines).
 For synthesis what matters is: who said it, in what order, and that nothing is dropped.
-So consecutive fragments from the same speaker are merged into one turn, and every other
-signal (frames, grounded events, decisions, alerts) is interleaved on the same timeline.
+So consecutive fragments from the same speaker are merged into one turn — a turn only ends
+when the speaker changes, never on a pause, because where one topic ends and the next
+begins is a judgement the model makes after reading the whole turn, not something a
+silence timer should decide. Every other signal (frames, grounded events, decisions,
+alerts) is interleaved on the same timeline.
 """
 
 from datetime import timedelta, timezone
@@ -13,32 +16,33 @@ from app.knowledge.store import KnowledgeStore
 from app.models import MeetingSession, TranscriptEntry
 from app.synthesis.schemas import SceneIndex, ScenePage
 
-MERGE_GAP_SECONDS = 6.0
 SPEAKER_ROLES = {"我": "主持人（本機麥克風）", "與會者": "遠端與會者（會議音訊）"}
 MEETING_TZ = timezone(timedelta(hours=8))  # Asia/Taipei (no tzdata dependency on Windows)
 WEEKDAYS = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
 
 
+def _ts(value: float) -> float:
+    return round(value, 1)
+
+
 def merge_turns(entries: list[TranscriptEntry]) -> list[dict[str, Any]]:
+    """One turn per stretch of the same speaker; each fragment keeps its own ts so the
+    model can still point at the sentence it is quoting."""
     turns: list[dict[str, Any]] = []
     for entry in sorted(entries, key=lambda item: item.ts):
         last = turns[-1] if turns else None
-        if (
-            last
-            and last["speaker"] == entry.speaker
-            and entry.ts - last["ts_end"] <= MERGE_GAP_SECONDS
-        ):
+        if last and last["speaker"] == entry.speaker:
             last["text"] = f"{last['text']}{entry.text}".strip()
-            last["ts_end"] = entry.ts
-            last["fragments"] += 1
+            last["ts_end"] = _ts(entry.ts)
+            last["sentences"].append({"ts": _ts(entry.ts), "text": entry.text.strip()})
         else:
             turns.append(
                 {
                     "speaker": entry.speaker,
-                    "ts_start": entry.ts,
-                    "ts_end": entry.ts,
+                    "ts_start": _ts(entry.ts),
+                    "ts_end": _ts(entry.ts),
                     "text": entry.text.strip(),
-                    "fragments": 1,
+                    "sentences": [{"ts": _ts(entry.ts), "text": entry.text.strip()}],
                 }
             )
     return turns
@@ -50,28 +54,31 @@ def build_timeline(session: MeetingSession) -> list[dict[str, Any]]:
         for turn in merge_turns(session.transcript)
     ]
     events += [
-        {"ts": frame.ts, "type": "frame", "frame_id": frame.id, "reason": frame.reason}
+        {"ts": _ts(frame.ts), "type": "frame", "frame_id": frame.id, "reason": frame.reason}
         for frame in session.frames
     ]
     events += [
         {
-            "ts": event.ts,
+            "ts": _ts(event.ts),
             "type": "grounded_event",
             "id": event.id,
             "speaker": event.speaker,
             "utterance": event.utterance,
             "target": event.target,
             "observation": event.observation,
+            "said": event.said,
             "frame_id": event.frame_id,
             "confidence": event.confidence,
         }
         for event in session.grounded_events
     ]
     events += [
-        {"ts": decision.ts, "type": "decision", **decision.model_dump()}
+        {**decision.model_dump(), "ts": _ts(decision.ts), "type": "decision"}
         for decision in session.decision_state.decisions
     ]
-    events += [{"ts": alert.ts, "type": "alert", **alert.model_dump()} for alert in session.alerts]
+    events += [
+        {**alert.model_dump(), "ts": _ts(alert.ts), "type": "alert"} for alert in session.alerts
+    ]
     return sorted(events, key=lambda item: (item["ts"], item["type"] != "frame"))
 
 
@@ -84,6 +91,21 @@ def scene_of(session: MeetingSession, ts: float) -> str | None:
         else:
             break
     return active or (session.scenes[0].id if session.scenes else None)
+
+
+def _page_items(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pages are about *when* something was said, so a long single-speaker turn is
+    re-split into its sentences here; the turn stays whole in the timeline."""
+    items: list[dict[str, Any]] = []
+    for item in timeline:
+        if item["type"] == "utterance":
+            items += [
+                {"ts": s["ts"], "type": "utterance", "speaker": item["speaker"], "text": s["text"]}
+                for s in item["sentences"]
+            ]
+        elif item["type"] != "frame":
+            items.append(item)
+    return items
 
 
 def build_pages(session: MeetingSession, timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -103,9 +125,7 @@ def build_pages(session: MeetingSession, timeline: list[dict[str, Any]]) -> list
         for scene in session.scenes
     }
     order = [scene.id for scene in session.scenes]
-    for item in timeline:
-        if item["type"] == "frame":
-            continue
+    for item in _page_items(timeline):
         main = scene_of(session, item["ts"])
         if main is None:
             continue
@@ -167,7 +187,10 @@ def build_record(session: MeetingSession, knowledge: KnowledgeStore) -> dict[str
             {"speaker": speaker, "role": SPEAKER_ROLES.get(speaker, "未知")} for speaker in speakers
         ],
         "notes": [
-            "utterance 已將同一說話者的連續片段合併；speaker 欄位來自獨立音訊通道，可信。",
+            (
+                "utterance 是同一說話者連續講的整段話（只有換人才切開），sentences 是其中每句與時間；"
+                "speaker 欄位來自獨立音訊通道，可信。"
+            ),
             "ts 為會議開始後的秒數；frame_id 可用於引用畫面。",
             (
                 "pages 是依分享畫面切出的頁（scene），同一頁上說的內容放在一起；"

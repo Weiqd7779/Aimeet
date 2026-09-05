@@ -79,6 +79,24 @@ def test_utterance_near_page_change_links_both_pages(tmp_path: Path) -> None:
     assert texts(pages[1]) == [("翻頁前最後一句", 1), ("翻頁後第一句", None), ("B 頁中間", None)]
 
 
+def test_turn_splits_only_when_speaker_changes() -> None:
+    """A pause is not a topic boundary: the model decides that after reading the whole
+    turn, so the record hands it the full stretch of one speaker's speech."""
+    session = MeetingSession()
+    session.transcript = [
+        TranscriptEntry(ts=1.0, speaker="我", text="還有這一包衛生紙。"),
+        TranscriptEntry(ts=9.5, speaker="我", text="要被加入是我們的合作對象。"),
+        TranscriptEntry(ts=30.0, speaker="我", text="還有一支娃娃樹。"),
+        TranscriptEntry(ts=33.0, speaker="與會者", text="好。"),
+        TranscriptEntry(ts=35.0, speaker="我", text="下禮拜三處理。"),
+    ]
+    turns = [i for i in build_timeline(session) if i["type"] == "utterance"]
+    assert [t["speaker"] for t in turns] == ["我", "與會者", "我"]
+    assert turns[0]["text"] == "還有這一包衛生紙。要被加入是我們的合作對象。還有一支娃娃樹。"
+    assert [s["ts"] for s in turns[0]["sentences"]] == [1.0, 9.5, 30.0]
+    assert (turns[0]["ts_start"], turns[0]["ts_end"]) == (1.0, 30.0)
+
+
 def test_session_and_report_survive_restart(tmp_path: Path) -> None:
     session = MeetingSession()
     recorder = Recorder(session, tmp_path)
