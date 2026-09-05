@@ -78,9 +78,14 @@ JSON 是唯一真相、MD 是衍生品；原始片段不改寫。
 
 ```bash
 cp .env.example api/.env   # 填 OPENAI_API_KEY（必要）、GEMINI_API_KEY（STT bench 需要）
-make dev-api               # uvicorn --reload --reload-dir app（只監看 app/，測試時不會被 reload 打斷）
-make dev-web               # http://localhost:3000
+make dev-api               # api/dev.ps1：先殺掉佔著 :8000 的任何進程樹 + 本 checkout 的孤兒 worker，再起 uvicorn --reload
+make dev-web               # web/dev.ps1：同理處理 :3000
+make restart               # 只殺不起：清掉 :8000 / :3000
 ```
+
+**Windows 上不要直接跑 `uvicorn` / `next dev`。** 只殺 reloader 父進程會留下 worker 繼續佔 port；
+新起的 server 綁得上但連線全被孤兒接走，跑的是它當初載入的舊程式碼。我們曾因此對著一個 20 分鐘前的
+worker debug「prompt 修了怎麼還洩漏」。`dev.ps1` 啟動前清、Ctrl+C 後再清一次。
 
 API at http://localhost:8000. `GET /health` 應回 `live_provider: openai`。
 
