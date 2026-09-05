@@ -55,7 +55,23 @@ def prompt_terms(prompt: str) -> list[str]:
     return [t.strip("。 ") for t in re.split(r"[、,]", listing) if len(t.strip("。 ")) >= 2]
 
 
-def looks_like_prompt(text: str, terms: list[str]) -> bool:
+MIN_VERBATIM_CHARS = 6
+_PUNCT = re.compile(r"[\s，。、,.!?！？:：「」()（）]")
+
+
+def _bare(text: str) -> str:
+    return _PUNCT.sub("", text).lower()
+
+
+def looks_like_prompt(text: str, terms: list[str], prompt: str = "") -> bool:
+    """True when the transcript is the prompt talking, not a person.
+
+    Verbatim: the whole utterance appears inside the prompt (an instruction fragment or
+    a listed term echoed back on its own). Dense: several distinct vocabulary items woven
+    into one turn, which real speech does not do."""
+    bare = _bare(text)
+    if prompt and len(bare) >= MIN_VERBATIM_CHARS and bare in _bare(prompt):
+        return True
     hits = {term for term in terms if term.lower() in text.lower()}
     return len(hits) >= MAX_PROMPT_TERMS or (
         len(text) > LONG_UTTERANCE_CHARS and len(hits) >= LONG_UTTERANCE_TERMS

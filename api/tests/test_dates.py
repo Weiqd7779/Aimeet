@@ -22,6 +22,13 @@ def test_prompts_and_tool_schemas_contain_no_concrete_date_examples() -> None:
         assert not CONCRETE_DATE.search(text), CONCRETE_DATE.search(text).group(0)  # type: ignore[union-attr]
 
 
+def test_transcription_prompt_contains_no_example_speech() -> None:
+    """The STT model echoes example sentences back as transcripts (seen live, 5x in a row)."""
+    from app.live.openai_rt import TRANSCRIPTION_PROMPT
+
+    assert not re.search(r"例如|「", TRANSCRIPTION_PROMPT)
+
+
 def _fact(fact: str, quote: str, resolved: str | None) -> KeyFact:
     return KeyFact(
         fact=fact, quote=quote, speaker="我", ts=1.0, category="date", resolved_date=resolved

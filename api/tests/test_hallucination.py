@@ -26,7 +26,22 @@ def test_prompt_regurgitation_is_rejected_but_real_sentences_pass() -> None:
         "Prototype C的滿意度中等,握感的問題還沒解,供應商說兩週內可以交樣品。",
         "但是 B 的成本是一千零二十，超過我們八百五的上限。",
     ):
-        assert not looks_like_prompt(text, TERMS), text
+        assert not looks_like_prompt(text, TERMS, TRANSCRIPTION_PROMPT), text
+
+
+# Live 2026-09-05: the transcriber returned the prompt's own example sentence five times
+# while the host said something else. The prompt may not contain example speech, and
+# anything that is verbatim prompt text must be rejected even if it does.
+def test_transcription_prompt_has_no_example_sentence() -> None:
+    assert "「" not in TRANSCRIPTION_PROMPT and "例如" not in TRANSCRIPTION_PROMPT
+
+
+def test_verbatim_prompt_text_is_rejected() -> None:
+    prompt = TRANSCRIPTION_PROMPT + "例如「我們這場會議先討論進度與問題，請確認時間。」"
+    assert looks_like_prompt("我們這場會議先討論進度與問題，請確認時間。", TERMS, prompt)
+    assert looks_like_prompt("請以繁體中文輸出", TERMS, TRANSCRIPTION_PROMPT)
+    # a short real sentence that happens to share a term is fine
+    assert not looks_like_prompt("樣品什麼時候到？", TERMS, TRANSCRIPTION_PROMPT)
 
 
 def _tone(level: int, seconds: float = 0.1) -> bytes:

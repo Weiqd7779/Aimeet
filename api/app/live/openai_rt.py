@@ -22,11 +22,12 @@ from app.live.reasoner import Reasoner
 
 SPEAKER_LABELS = {"me": "我", "remote": "與會者"}
 NOISE_REDUCTION = {"me": "near_field", "remote": "far_field"}
-# Keep the vocabulary short: the transcriber regurgitates these words as fake speech when
-# the audio has no clear talker (see hallucination.py), and every extra term feeds that.
+# Keep the vocabulary short and NEVER include an example sentence: the transcriber
+# regurgitates prompt text as fake speech when the audio has no clear talker (see
+# hallucination.py). A live session once transcribed the example sentence that used to
+# sit here, verbatim, five times in a row while the host was saying something else.
 TRANSCRIPTION_PROMPT = (
-    "台灣繁體中文的產品會議對話，夾雜英文技術詞彙。請以繁體中文輸出，"
-    "例如「我們這場會議先討論進度與問題，請確認時間。」"
+    "台灣繁體中文的產品會議對話，夾雜英文技術詞彙。請以繁體中文輸出。"
     "詞彙：Prototype A、Prototype B、Prototype C、Q4、BOM、滿意度、握感、矽膠包覆、樣品。"
 )
 
@@ -180,7 +181,7 @@ class OpenAIRealtimeEngine:
         if not self._energy[source].had_speech(transcript.ts, self._elapsed()):
             peak = self._energy[source].peak(transcript.ts, self._elapsed())
             return f"no speech energy (peak rms {peak:.0f})"
-        if looks_like_prompt(transcript.text, self._terms):
+        if looks_like_prompt(transcript.text, self._terms, TRANSCRIPTION_PROMPT):
             return "prompt vocabulary regurgitated"
         return None
 
