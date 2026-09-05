@@ -1,6 +1,6 @@
 # AIMEET 艾咪 — 會議脈絡驗證 Agent
 
-> 艾咪不是取代你的會議工具，而是驗證會議中發生的事情。
+艾咪**不是取代**你的會議工具，而是驗證會議中發生的事情。
 
 ---
 
@@ -185,5 +185,9 @@ ELEVENLABS_API_KEY=sk_...     # 可留空：提醒卡片照出，只是不出聲
 | Ivy | 程式開發、製作簡報 |
 
 ## License
+ 
+本專案以 [MIT License](./LICENSE) 授權釋出。
+Copyright (c) 2026 Winston S.
 
-請在儲存庫根目錄加入明確的 `LICENSE` 檔案，並在此標示授權名稱。
+特別聲明：
+- ElevenLabs 聲音「IVY」為專案成員本人聲音之 clone，欲使用請先詢問
