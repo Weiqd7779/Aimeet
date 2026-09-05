@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     context_after_seconds: float = 30.0
     buffer_seconds: float = 60.0
     record_dir: str = "data/sessions"
+    # Consistency agent (in-meeting contradictions) + spoken reminders via ElevenLabs
+    consistency_enabled: bool = True
+    # Silent reminders are *only* time / assignee inconsistencies (each one is voiced).
+    # Knowledge-base conflicts, slide mismatches and generic notify_speaker alerts are
+    # still understood by the reasoner but dropped here. Set false to get them back.
+    alerts_inconsistency_only: bool = True
+    elevenlabs_api_key: str = ""
+    elevenlabs_voice_id: str = "1ulrCnnL9y7FtQmCz2nP"  # IVY (cloned)
+    elevenlabs_model: str = "eleven_v3"
+    elevenlabs_output_format: str = "mp3_44100_64"
 
     model_config = SettingsConfigDict(
         env_file=".env",

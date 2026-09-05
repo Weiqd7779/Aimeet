@@ -144,6 +144,21 @@ def hard_rules(result: RunResult) -> Verdict:
         verdict.add("alert_kinds", not missing, f"missing {missing}, got {kinds}")
     if "max_alerts" in expect:
         verdict.add("max_alerts", len(alerts) <= expect["max_alerts"], f"{len(alerts)}")
+    if "inconsistency_min" in expect:
+        final = {a["id"]: a for a in alerts if a["kind"] == "inconsistency"}
+        verdict.add(
+            "inconsistency_min",
+            len(final) >= expect["inconsistency_min"],
+            f"{[a['detail'] for a in final.values()]}",
+        )
+    if "speech_min" in expect:
+        # the voice actually rendered (ElevenLabs returned audio), not just the script
+        spoken = [s for s in result.payloads("speech") if s.get("audio_b64")]
+        verdict.add(
+            "speech_min",
+            len(spoken) >= expect["speech_min"],
+            f"{len(spoken)} clips, saved: {result.speech_files}",
+        )
     if "max_conflicts_per_source" in expect:
         final = {a["id"]: a for a in alerts if a["kind"] == "conflict"}
         per_source: dict[str | None, int] = {}
@@ -256,6 +271,11 @@ def _summary(result: RunResult) -> dict[str, Any]:
             for g in result.payloads("grounded_event")
         ],
         "alerts": result.payloads("alert"),
+        "speech": [
+            {k: v for k, v in s.items() if k != "audio_b64"}
+            | {"has_audio": bool(s.get("audio_b64"))}
+            for s in result.payloads("speech")
+        ],
         "report": (result.report or {}).get("report"),
         "record_utterances": (result.record or {}).get("utterances"),
         "pages": [

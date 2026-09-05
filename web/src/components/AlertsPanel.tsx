@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Bell, Check, EyeOff, Target } from "lucide-react";
+import { AlertTriangle, Bell, Check, EyeOff, GitCompareArrows, Target, Volume2, VolumeX } from "lucide-react";
 import Image from "next/image";
 import type { MeetingState } from "@/hooks/useMeeting";
 
@@ -11,7 +11,10 @@ function timestamp(seconds: number) {
 export function AlertsPanel({ meeting, dimmed = false }: { meeting: MeetingState; dimmed?: boolean }) {
   const unread = meeting.alerts.filter((alert) => alert.status === "open").length;
   const alertColor = (kind: string) =>
-    kind === "conflict" ? "border-red-400/30 bg-red-500/10" : kind === "slide_mismatch" ? "border-amber-300/30 bg-amber-400/10" : "border-blue-300/30 bg-blue-400/10";
+    kind === "conflict" ? "border-red-400/30 bg-red-500/10" : kind === "inconsistency" ? "border-fuchsia-300/30 bg-fuchsia-400/10" : kind === "slide_mismatch" ? "border-amber-300/30 bg-amber-400/10" : "border-blue-300/30 bg-blue-400/10";
+  const alertIcon = (kind: string) =>
+    kind === "conflict" ? <AlertTriangle className="mt-0.5 shrink-0 text-red-300" size={16} /> : kind === "inconsistency" ? <GitCompareArrows className="mt-0.5 shrink-0 text-fuchsia-200" size={16} /> : <Bell className="mt-0.5 shrink-0 text-amber-200" size={16} />;
+  const testId = (kind: string) => (kind === "conflict" ? "conflict-alert" : kind === "inconsistency" ? "inconsistency-alert" : "alert-card");
 
   return (
     <div className={`space-y-4 ${dimmed ? "opacity-45" : ""}`}>
@@ -21,21 +24,34 @@ export function AlertsPanel({ meeting, dimmed = false }: { meeting: MeetingState
             <p className="eyebrow">02 · 即時提醒</p>
             <h2 className="text-xl font-semibold text-white">靜默提醒</h2>
           </div>
-          <div className="relative text-slate-400">
-            <Bell size={19} />
-            {unread > 0 && <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">{unread}</span>}
+          <div className="flex items-center gap-3 text-slate-400">
+            <button
+              type="button"
+              data-testid="voice-toggle"
+              title={meeting.voiceEnabled ? "語音提醒：開（點擊關閉）" : "語音提醒：關（點擊開啟）"}
+              aria-pressed={meeting.voiceEnabled}
+              onClick={() => meeting.setVoiceEnabled(!meeting.voiceEnabled)}
+              className={`rounded-lg border p-1.5 transition ${meeting.voiceEnabled ? "border-fuchsia-300/40 bg-fuchsia-400/10 text-fuchsia-200" : "border-white/10 text-slate-500 hover:text-slate-300"}`}
+            >
+              {meeting.voiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+            </button>
+            <div className="relative">
+              <Bell size={19} />
+              {unread > 0 && <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">{unread}</span>}
+            </div>
           </div>
         </div>
         <div className="space-y-3">
           {meeting.alerts.length === 0 && <p className="empty-state">沒有需要注意的事項</p>}
           {meeting.alerts.map((alert) => (
-            <article key={alert.id} data-testid={alert.kind === "conflict" ? "conflict-alert" : "alert-card"} className={`rounded-xl border p-3 ${alertColor(alert.kind)} ${alert.status !== "open" ? "opacity-60" : ""}`}>
+            <article key={alert.id} data-testid={testId(alert.kind)} className={`rounded-xl border p-3 ${alertColor(alert.kind)} ${alert.status !== "open" ? "opacity-60" : ""}`}>
               <div className="flex items-start gap-2">
-                {alert.kind === "conflict" ? <AlertTriangle className="mt-0.5 shrink-0 text-red-300" size={16} /> : <Bell className="mt-0.5 shrink-0 text-amber-200" size={16} />}
+                {alertIcon(alert.kind)}
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold text-white">{alert.kind === "conflict" ? "⚠ 可能與既有決議衝突" : alert.title}</p>
+                  <p className="text-xs font-semibold text-white">{alert.kind === "conflict" ? "⚠ 可能與既有決議衝突" : alert.kind === "inconsistency" ? `⇄ ${alert.title}` : alert.title}</p>
                   <p className="mt-1 text-xs leading-5 text-slate-200">{alert.detail}</p>
-                  {alert.source && <p className="mt-2 text-[10px] text-slate-400">來源：{alert.source}</p>}
+                  {alert.kind === "inconsistency" && alert.speech && <p className="mt-1 text-[11px] italic leading-4 text-fuchsia-100/80">「{alert.speech.replace(/\[[^\]]*\]\s*/g, "")}」</p>}
+                  {alert.source && alert.kind !== "inconsistency" && <p className="mt-2 text-[10px] text-slate-400">來源：{alert.source}</p>}
                 </div>
               </div>
               {alert.status === "open" && (

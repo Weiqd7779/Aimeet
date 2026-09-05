@@ -47,7 +47,7 @@ class GroundedVisualEvent(BaseModel):
     lifecycle: EventLifecycle = "triggered"
 
 
-AlertKind = Literal["conflict", "slide_mismatch", "info"]
+AlertKind = Literal["conflict", "slide_mismatch", "info", "inconsistency"]
 AlertStatus = Literal["open", "acknowledged", "dismissed"]
 
 
@@ -60,6 +60,8 @@ class Alert(BaseModel):
     source: str | None = None
     decision_id: str | None = None
     status: AlertStatus = "open"
+    speech: str | None = None  # spoken version of `detail` (what the TTS voice says)
+    evidence: list[str] = Field(default_factory=list)  # the utterances that back the alert
 
 
 DecisionStatus = Literal["candidate", "confirmed", "rejected"]
@@ -163,6 +165,7 @@ EventType = Literal[
     "decision",
     "frame_ack",
     "utterance_resolved",
+    "speech",
     "status",
     "error",
 ]

@@ -48,8 +48,14 @@ FastAPI LiveSessionManager (api/app/live/session.py)
       A 聽：純文字，近 12 句 + 決策/錨點狀態 → 決策/提醒；有指涉就叫 look_at_screen(物件名)
       B 看：只在 A 要求時，撈「開口→收口」區間內的截圖（最多 3 張，找不到往前 10s 再找）
            → create_anchor(frame_index) 或 not_visible
-      session 層守門：anchor 要有指示語 + 完整句 + 視覺信心 ≥0.6；同物件 15s 內更新不新增；
-      決策要有拍板詞；同主題合併、理由語意去重、同來源 conflict 只留一條
+      session 層守門：anchor 要視覺信心 ≥0.6，且（除非信心 ≥0.8）句子要有指示語 + 是完整句；
+      同物件 15s 內更新不新增；決策要有拍板詞；同主題合併、理由語意去重
+ └─ ConsistencyAgent (app/consistency.py)  與 Reasoner 平行、每句一次（只在句子含時間詞或指派詞時叫模型）：
+      維護「承諾帳本」（事／人／時間），最新一句和帳本矛盾 → Inconsistency（time | assignee）
+      明講「改成／更正／延到」= 更新不算衝突；問句／確認句不算
+      → Alert(kind=inconsistency, detail=「事：X｜人：Y｜時間：A → B」, evidence=[先前原話, 現在原話])
+      → app/tts.py 呼叫 ElevenLabs（eleven_v3、自製聲音 IVY）合成口語提醒 → WS `speech` 事件（mp3 base64）
+      靜默提醒 = 只有這種（ALERTS_INCONSISTENCY_ONLY=true）；知識庫衝突 / 投影片提醒仍記錄但不顯示
         ▼
 Recorder (api/app/record/store.py)  write-first、append-only
  data/sessions/{id}/events.jsonl   事件流（source of truth）
@@ -76,15 +82,28 @@ JSON 是唯一真相、MD 是衍生品；原始片段不改寫。
 
 ## Run locally
 
-需求：Python 3.12+、Node.js 20+（`uv` 由 setup 自動安裝）。
+需求：Python 3.12+、Node.js 20+、Chrome/Edge（getDisplayMedia）；`uv` 由 setup 自動安裝。
+
+macOS / Linux：
 
 ```bash
 git clone https://github.com/Weiqd7779/Aimeet.git
 cd Aimeet
 make dev          # 自動跑 setup.sh（裝依賴、建 api/.env）後同時起 api 與 web
-make dev-api      # 只起 api：api/dev.ps1 先殺掉佔著 :8000 的進程樹 + 本 checkout 的孤兒 worker
-make dev-web      # 只起 web：web/dev.ps1 同理處理 :3000
-make restart      # 只殺不起：清掉 :8000 / :3000
+make setup        # 只裝依賴不啟動
+```
+
+Windows PowerShell：
+
+```powershell
+git clone https://github.com/Weiqd7779/Aimeet.git; cd Aimeet
+Copy-Item .env.example api\.env   # 填 OPENAI_API_KEY（必要）、ELEVENLABS_API_KEY（要語音提醒才需要）
+                                  # 並把 MOCK_MODE 改成 false、LIVE_PROVIDER=openai
+cd api; uv sync; cd ..            # 依 uv.lock 建 .venv
+cd web; npm ci; cd ..             # 依 package-lock.json
+.\dev.ps1                         # 一鍵：殺掉舊的 → 開兩個視窗跑 API(:8000) + Web(:3000)
+.\dev.ps1 -Stop                   # 全部停掉
+make dev-api / make dev-web       # 單獨啟動（各自的 dev.ps1）；make restart 只殺不起
 ```
 
 `make dev` 會啟動 API（http://localhost:8000）與 web app（http://localhost:3000）。
@@ -105,6 +124,9 @@ make restart      # 只殺不起：清掉 :8000 / :3000
 
 完整人工驗收步驟見 [`docs/e2e_google_meet_checklist.md`](docs/e2e_google_meet_checklist.md)。
 
+**沒有 OPENAI_API_KEY 也能看 UI**：保留 `MOCK_MODE=true`，開始會議後會重播 `api/app/live/mock_script.json`。
+沒有 `ELEVENLABS_API_KEY` 時提醒卡片照出，只是不出聲。
+
 **Windows 上不要直接跑 `uvicorn` / `next dev`。** 只殺 reloader 父進程會留下 worker 繼續佔 port；
 新起的 server 綁得上但連線全被孤兒接走，跑的是它當初載入的舊程式碼。我們曾因此對著一個 20 分鐘前的
 worker debug「prompt 修了怎麼還洩漏」。`dev.ps1` 啟動前清、Ctrl+C 後再清一次。
@@ -115,8 +137,9 @@ API at http://localhost:8000. `GET /health` 應回 `live_provider: openai`。
 
 | 指令 | 內容 |
 |---|---|
-| `cd api && uv run pytest` | 離線單元測試（mock 引擎、Recorder 一致性） |
+| `cd api && uv run pytest` | 離線單元測試（mock 引擎、Recorder 一致性、衝突 agent 規則、錨定門檻） |
 | `make e2e` / `uv run python -m e2e.run A4 D2` | 對**運行中的 API** 跑實際使用驗收（TTS 模擬兩位說話者 + 合成畫面 + 合成喇叭回音 → 硬規則 + LLM 裁判），報告在 `api/e2e/results/` |
+| `uv run python -m e2e.run B6` | 前後矛盾情境：需 `ELEVENLABS_API_KEY`；驗證 inconsistency 提醒 + 語音真的有合成，mp3 存到 `api/e2e/results/speech/` 可直接聽 |
 | `uv run python -m e2e.calibrate` | 裁判校準：故意弄壞（speaker 對調 / 少數字 / 少一句）必須被判 FAIL |
 | `uv run python -m bench.stt` | STT A/B benchmark，結果在 `api/bench/results/` |
 
@@ -138,6 +161,11 @@ API at http://localhost:8000. `GET /health` 應回 `live_provider: openai`。
 - `DATA_DIR`: Directory for persisted GroundedVisualEvents and evidence frames (default: `data`)
 - `CONTEXT_BEFORE_SECONDS` / `CONTEXT_AFTER_SECONDS`: Context window around a trigger (default: `20` / `30`)
 - `BUFFER_SECONDS`: In-memory transcript/frame ring buffer window (default: `60`)
+- `ELEVENLABS_API_KEY`: 語音提醒；空白則只有卡片不出聲
+- `ELEVENLABS_VOICE_ID`: 聲音（default: `1ulrCnnL9y7FtQmCz2nP` = 自製 clone「IVY」；`GET /v1/voices` 可列出帳號內所有聲音）
+- `ELEVENLABS_MODEL`: `eleven_v3`（支援 `[clears throat]` 等 audio tags、最像人、約 6–9s 延遲）或 `eleven_flash_v2_5`（<1s、1.15x 語速、tags 會自動拿掉）
+- `ALERTS_INCONSISTENCY_ONLY`: `true`（default）靜默提醒只保留時間／負責人不一致；`false` 恢復知識庫衝突與投影片提醒
+- `CONSISTENCY_ENABLED`: `false` 可整個關掉衝突 agent
 
 ## GroundedVisualEvent pipeline
 

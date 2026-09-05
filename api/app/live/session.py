@@ -5,6 +5,7 @@ import contextlib
 import logging
 import re
 from dataclasses import dataclass
+from datetime import timedelta, timezone
 from typing import Any
 
 from fastapi import WebSocket
@@ -13,6 +14,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from app.config import settings
 from app.conflict import check_conflict
+from app.consistency import ConsistencyAgent, Inconsistency
 from app.knowledge.store import KnowledgeStore
 from app.live.deictic import DEICTIC
 from app.live.events import (
@@ -39,6 +41,7 @@ from app.models import (
 )
 from app.record.store import Recorder
 from app.storage import save_events, save_frame
+from app.tts import mime_type, speak
 from app.vision import verify_visual_reference
 
 logger = logging.getLogger(__name__)
@@ -64,7 +67,7 @@ class ConflictJob:
 
 ProcessingJob = VerifyJob | CloseJob | ConflictJob
 
-logger = logging.getLogger(__name__)
+TAIPEI = timezone(timedelta(hours=8))
 
 # Someone actually committing to something. Evaluating ("先看成本") is not a decision.
 COMMIT = re.compile(
@@ -75,6 +78,7 @@ COMMIT = re.compile(
 # "候選" is deliberately absent: "採用 C，B 留做候選" is a decision *with* a runner-up.
 UNDECIDED = re.compile(r"尚未|未定|待定|評估中|考慮中|還沒決定|TBD", re.IGNORECASE)
 ANCHOR_MIN_CONFIDENCE = 0.6  # vision step must be sure it saw the named thing
+ANCHOR_SURE_CONFIDENCE = 0.8  # this sure, and the utterance's wording no longer has to qualify
 ANCHOR_MERGE_SECONDS = 15.0  # same speaker, same object/frame within this = one anchor
 FRAGMENT_TAIL = re.compile(r"(這個|那個|這|那|是|的|就是|然後|以及|還有)[，,。．.…\s]*$")
 SAME_MEANING = 85  # rapidfuzz score above which two reasons/constraints are one
@@ -126,6 +130,8 @@ class LiveSessionManager:
         else:
             self.engine = MockLiveEngine()
         self.recorder = Recorder(session, settings.record_dir)
+        self.consistency = ConsistencyAgent() if settings.consistency_enabled else None
+        self._consistency_tasks: set[asyncio.Task[None]] = set()
         self._started = asyncio.get_running_loop().time()
         self.queue: asyncio.Queue[ProcessingJob] = asyncio.Queue()
         self.context_before_seconds = settings.context_before_seconds
@@ -198,7 +204,13 @@ class LiveSessionManager:
                     "frames": len(self.session.frames),
                 },
             )
-            for task in (reader_task, event_task, self._worker, *self._timers):
+            for task in (
+                reader_task,
+                event_task,
+                self._worker,
+                *self._timers,
+                *self._consistency_tasks,
+            ):
                 if task and not task.done():
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
@@ -267,6 +279,7 @@ class LiveSessionManager:
                 peak_rms=getattr(event, "peak_rms", None),
             )
             await self._emit("transcript", transcript.model_dump())
+            await self._watch_consistency(transcript)
         elif isinstance(event, ToolCall):
             await self._handle_tool_call(event)
         elif isinstance(event, IntentResolved):
@@ -321,14 +334,17 @@ class LiveSessionManager:
             if (real_engine and not self.session.frames) or not source:
                 return
             # Hard gates (the model's judgement alone over-anchors):
-            #  - the utterance must contain a pointing / screen word,
-            #  - it must be a whole sentence, not a dangling 「以及這個是…」,
-            #  - the vision step must be sure it saw the named thing.
+            #  - the vision step must be sure it saw the named thing, and
+            #  - unless it is *very* sure, the utterance must contain a pointing / screen
+            #    word and be a whole sentence, not a dangling 「以及這個是…」.
+            # The text gates are a hedge for uncertain vision. STT splits 「就是這個。」
+            # 「最新的智慧眼鏡…」 into two utterances that each fail one of them while the
+            # vision step saw the glasses at 0.92 both times; a confident look wins.
             confidence = float(event.args.get("confidence", 0.0))
+            weak_text = not DEICTIC.search(source.text) or _is_fragment(source.text)
             if real_engine and (
-                not DEICTIC.search(source.text)
-                or _is_fragment(source.text)
-                or confidence < ANCHOR_MIN_CONFIDENCE
+                confidence < ANCHOR_MIN_CONFIDENCE
+                or (weak_text and confidence < ANCHOR_SURE_CONFIDENCE)
             ):
                 self.recorder.note(
                     "anchor_skipped",
@@ -424,11 +440,18 @@ class LiveSessionManager:
             _extend_unique(self.session.decision_state.constraints, decision.constraints)
             self.recorder.link(event.utterance_id, event.name, decision.id)
             await self._emit("decision", decision.model_dump())
-            if choice_changed:
+            if choice_changed and not settings.alerts_inconsistency_only:
                 # Only a new or changed choice can create a new conflict; re-checking the
                 # same choice every time someone restates it just stacks identical alerts.
                 self.queue.put_nowait(ConflictJob(decision, event.utterance_id))
         elif event.name == "notify_speaker":
+            if settings.alerts_inconsistency_only:
+                # Kept on record for the report, never surfaced as a silent reminder.
+                self.recorder.note(
+                    "alert_suppressed",
+                    {"utterance_id": event.utterance_id, "args": event.args},
+                )
+                return
             kind = event.args.get("kind", "info")
             if kind not in {"conflict", "slide_mismatch", "info"}:
                 kind = "info"
@@ -451,6 +474,103 @@ class LiveSessionManager:
                     "reason": event.args.get("reason"),
                 },
             )
+        elif event.name == "flag_inconsistency":
+            finding = Inconsistency(**event.args["finding"])
+            alert = self._merge_inconsistency(finding, event.ts or self._elapsed())
+            self.recorder.link(event.utterance_id, event.name, alert.id)
+            await self._emit("alert", alert.model_dump())
+            if audio := event.args.get("audio_b64"):
+                self.recorder.note("speech", {"alert_id": alert.id, "bytes": len(audio) * 3 // 4})
+                await self._emit(
+                    "speech",
+                    {
+                        "alert_id": alert.id,
+                        "text": alert.speech,
+                        "audio_b64": audio,
+                        "mime": mime_type(),
+                    },
+                )
+
+    # --- consistency agent -----------------------------------------------------
+
+    async def _watch_consistency(self, transcript: TranscriptEntry) -> None:
+        """Run the consistency agent off the main loop; its findings come back through the
+        engine queue as `flag_inconsistency` tool calls (with the voice already rendered),
+        so alerts are still emitted in order with everything else. The mock engine runs
+        it inline: no network, and the scripted session must not end before it answers."""
+        if self.consistency is None:
+            return
+        if isinstance(self.engine, MockLiveEngine):
+            for call in await self._check_consistency(transcript):
+                await self._handle_tool_call(call)
+            return
+
+        async def deliver() -> None:
+            for call in await self._check_consistency(transcript):
+                await self.engine.events.put(call)
+
+        task = asyncio.create_task(deliver())
+        self._consistency_tasks.add(task)
+        task.add_done_callback(self._consistency_tasks.discard)
+
+    async def _check_consistency(self, transcript: TranscriptEntry) -> list[ToolCall]:
+        assert self.consistency is not None
+        meeting_date = self.session.started_at.astimezone(TAIPEI).strftime("%Y-%m-%d（%a）")
+        try:
+            findings = await self.consistency.observe(transcript, meeting_date)
+        except Exception:
+            logger.exception("consistency agent failed")
+            return []
+        calls: list[ToolCall] = []
+        for finding in findings:
+            audio = await speak(finding.speech)
+            calls.append(
+                ToolCall(
+                    name="flag_inconsistency",
+                    args={
+                        "finding": finding.model_dump(),
+                        "audio_b64": base64.b64encode(audio).decode("ascii") if audio else None,
+                    },
+                    ts=transcript.ts,
+                    utterance_id=transcript.id,
+                )
+            )
+        return calls
+
+    def _merge_inconsistency(self, finding: Inconsistency, ts: float) -> Alert:
+        """One open inconsistency per (task, kind): a third version of the same deadline
+        updates the card instead of stacking a second one."""
+        source = f"{finding.kind}:{finding.task}"
+        existing = next(
+            (
+                a
+                for a in self.session.alerts
+                if a.kind == "inconsistency" and a.status == "open" and a.source == source
+            ),
+            None,
+        )
+        title = "時間前後不一致" if finding.kind == "time" else "負責人前後不一致"
+        evidence = [q for q in (finding.previous_quote, finding.current_quote) if q]
+        if existing:
+            existing.detail, existing.speech, existing.ts, existing.title = (
+                finding.detail,
+                finding.speech,
+                ts,
+                title,
+            )
+            existing.evidence = evidence
+            return existing
+        alert = Alert(
+            ts=ts,
+            kind="inconsistency",
+            title=title,
+            detail=finding.detail,
+            source=source,
+            speech=finding.speech,
+            evidence=evidence,
+        )
+        self.session.alerts.append(alert)
+        return alert
 
     async def _process_jobs(self) -> None:
         while True:

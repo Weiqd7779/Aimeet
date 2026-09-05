@@ -1,4 +1,4 @@
-export type AlertKind = "conflict" | "slide_mismatch" | "info";
+export type AlertKind = "conflict" | "slide_mismatch" | "info" | "inconsistency";
 export type AlertStatus = "open" | "acknowledged" | "dismissed";
 export type DecisionStatus = "candidate" | "confirmed" | "rejected";
 export type FrameReason = "deictic" | "diff" | "periodic" | "manual";
@@ -60,6 +60,16 @@ export interface Alert {
   source: string | null;
   decision_id: string | null;
   status: AlertStatus;
+  speech?: string | null;
+  evidence?: string[];
+}
+
+/** Rendered voice for an alert (ElevenLabs, server-side). */
+export interface SpeechEvent {
+  alert_id: string;
+  text: string | null;
+  audio_b64: string;
+  mime: string;
 }
 
 export interface Decision {
@@ -100,6 +110,7 @@ export type ServerEventType =
   | "decision"
   | "frame_ack"
   | "utterance_resolved"
+  | "speech"
   | "status"
   | "error";
 

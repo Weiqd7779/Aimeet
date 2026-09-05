@@ -1,0 +1,18 @@
+{
+  "id": "B6",
+  "title": "前後矛盾（時間、指派人）：出現 inconsistency 靜默提醒並播放語音",
+  "steps": [
+    { "at": 0.0, "speaker": "me", "say": "那 API 串接就由小王負責，下星期三交。" },
+    { "at": 6.0, "speaker": "remote", "say": "好，所以是下星期三對吧？" },
+    { "at": 11.0, "speaker": "me", "say": "對。另外測試計畫請小林處理。" },
+    { "at": 18.0, "speaker": "remote", "say": "我這邊寫的 API 串接是這星期五要交。" },
+    { "at": 26.0, "speaker": "me", "say": "測試計畫的部分，交給小陳來做。" }
+  ],
+  "settle_seconds": 30,
+  "expect": {
+    "alert_kinds_include": ["inconsistency"],
+    "inconsistency_min": 2,
+    "speech_min": 1,
+    "judge": "必須有兩則 inconsistency 提醒：一則指出 API 串接的時間從「下星期三」變成「這星期五」，一則指出測試計畫的負責人從「小林」變成「小陳」。第二句「所以是下星期三對吧？」只是確認，不得被當成衝突。每則 detail 要包含事情、人、時間三要素。"
+  }
+}

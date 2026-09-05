@@ -5,31 +5,64 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/* Projector-first: dark base, one system accent (cyan), one "the AI spoke" accent (fuchsia). */
+:root {
+  --bg: #070b14;
+  --ink: #e2e8f0;
+  --muted: #7c8aa5;
+  --line: rgb(255 255 255 / 0.08);
+  --system: #22d3ee;
+  --voice: #e879f9;
+}
+
+html { color-scheme: dark; }
 body {
-  background: #070b14;
-  color: #e2e8f0;
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans), "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  font-size: 16px;
 }
 
 button, input { font: inherit; }
 button:not(:disabled) { cursor: pointer; }
-.panel { border: 1px solid rgb(255 255 255 / 0.1); border-radius: 1rem; background: rgb(15 23 42 / 0.72); padding: 1.25rem; box-shadow: 0 18px 50px rgb(0 0 0 / 0.18); }
-.eyebrow { color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
-.section-title { color: #cbd5e1; font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
-.empty-state { border: 1px dashed rgb(255 255 255 / .1); border-radius: .75rem; padding: 1rem; text-align: center; color: #64748b; font-size: .75rem; }
-.button-primary, .button-secondary, .button-danger, .button-icon, .mini-button { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; border-radius: .65rem; font-size: .7rem; font-weight: 700; transition: opacity .2s, background .2s; }
-.button-primary { background: #22d3ee; color: #082f49; padding: .65rem .7rem; }
-.button-secondary { border: 1px solid rgb(103 232 249 / .25); background: rgb(8 47 73 / .55); color: #a5f3fc; padding: .65rem .5rem; }
-.button-danger { border: 1px solid rgb(248 113 113 / .2); background: rgb(127 29 29 / .35); color: #fca5a5; padding: .65rem .5rem; }
-.button-primary:disabled, .button-secondary:disabled, .button-danger:disabled, .button-icon:disabled { cursor: not-allowed; opacity: .35; }
-.button-icon { border: 1px solid rgb(255 255 255 / .1); background: rgb(255 255 255 / .04); color: #cbd5e1; padding: .6rem; }
-.field { min-width: 0; flex: 1; border: 1px solid rgb(255 255 255 / .1); border-radius: .65rem; background: rgb(2 6 23 / .6); padding: .6rem .75rem; color: #e2e8f0; outline: none; font-size: .75rem; }
-.field:focus { border-color: rgb(103 232 249 / .5); }
-.speaker-chip, .chip { border-radius: 999px; background: rgb(103 232 249 / .12); padding: .2rem .45rem; color: #a5f3fc; font-size: 10px; white-space: nowrap; }
-.mini-button { border: 1px solid rgb(255 255 255 / .12); background: rgb(255 255 255 / .06); padding: .35rem .55rem; color: #cbd5e1; }
+
+.eyebrow { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+.empty-state { border: 1px dashed var(--line); border-radius: .75rem; padding: 1.25rem; text-align: center; color: var(--muted); font-size: .9rem; }
+
+.button-primary, .button-secondary, .button-danger, .button-ghost, .mini-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: .45rem;
+  border-radius: .7rem; font-size: .85rem; font-weight: 700; transition: opacity .2s, background .2s, border-color .2s;
+}
+.button-primary { background: var(--system); color: #082f49; padding: .6rem 1rem; }
+.button-primary:not(:disabled):hover { background: #67e8f9; }
+.button-secondary { border: 1px solid rgb(103 232 249 / .3); background: rgb(8 47 73 / .55); color: #a5f3fc; padding: .6rem 1rem; }
+.button-danger { border: 1px solid rgb(248 113 113 / .25); background: rgb(127 29 29 / .35); color: #fca5a5; padding: .6rem 1rem; }
+.button-ghost { border: 1px solid var(--line); background: rgb(255 255 255 / .03); color: #cbd5e1; padding: .55rem .8rem; }
+.button-ghost:not(:disabled):hover { border-color: rgb(255 255 255 / .2); }
+.button-primary:disabled, .button-secondary:disabled, .button-danger:disabled, .button-ghost:disabled { cursor: not-allowed; opacity: .35; }
+.mini-button { border: 1px solid rgb(255 255 255 / .12); background: rgb(255 255 255 / .06); padding: .45rem .8rem; color: #cbd5e1; }
 .mini-button.muted { color: #94a3b8; }
-.label-green, .label-red, .label-muted { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
-.label-green { color: #86efac; }.label-red { color: #fca5a5; }.label-muted { color: #94a3b8; }
-.status-mini { border-radius: 999px; padding: .2rem .45rem; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.mini-button:not(:disabled):hover { background: rgb(255 255 255 / .1); }
+
+.speaker-chip {
+  border-radius: 999px; background: rgb(103 232 249 / .12); padding: .15rem .55rem;
+  color: #a5f3fc; font-size: 11px; font-weight: 700; white-space: nowrap; letter-spacing: .04em;
+}
+.speaker-chip.me { background: rgb(232 121 249 / .14); color: #f5d0fe; }
+
+/* New card landing in a list. */
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise .35s ease-out both; }
+
+/* Utterance that triggered a reminder. */
+.transcript-hit { border-left: 3px solid var(--voice); background: rgb(232 121 249 / .06); }
+
+/* Still used by the report drawer. */
+.chip { border-radius: 999px; background: rgb(103 232 249 / .12); padding: .2rem .5rem; color: #a5f3fc; font-size: 11px; white-space: nowrap; }
+.button-icon { display: inline-flex; align-items: center; justify-content: center; border-radius: .65rem; border: 1px solid var(--line); background: rgb(255 255 255 / .04); color: #cbd5e1; padding: .6rem; }
+.status-mini { border-radius: 999px; padding: .2rem .5rem; font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .status-mini.candidate { background: rgb(251 191 36 / .15); color: #fde68a; }.status-mini.confirmed { background: rgb(74 222 128 / .15); color: #bbf7d0; }.status-mini.rejected { background: rgb(248 113 113 / .15); color: #fecaca; }
-.tab { border-radius: .5rem; padding: .5rem .65rem; color: #64748b; font-size: .7rem; }.tab.active { background: rgb(103 232 249 / .12); color: #a5f3fc; }
+.tab { border-radius: .5rem; padding: .5rem .75rem; color: var(--muted); font-size: .8rem; }.tab.active { background: rgb(103 232 249 / .12); color: #a5f3fc; }
+
+.thin-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.thin-scroll::-webkit-scrollbar-thumb { background: rgb(255 255 255 / .12); border-radius: 3px; }
