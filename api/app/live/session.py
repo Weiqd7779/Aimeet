@@ -52,6 +52,7 @@ COMMIT = re.compile(
 # "候選" is deliberately absent: "採用 C，B 留做候選" is a decision *with* a runner-up.
 UNDECIDED = re.compile(r"尚未|未定|待定|評估中|考慮中|還沒決定|TBD", re.IGNORECASE)
 ANCHOR_MIN_CONFIDENCE = 0.6  # vision step must be sure it saw the named thing
+ANCHOR_SURE_CONFIDENCE = 0.8  # this sure, and the utterance's wording no longer has to qualify
 ANCHOR_MERGE_SECONDS = 15.0  # same speaker, same object/frame within this = one anchor
 FRAGMENT_TAIL = re.compile(r"(這個|那個|這|那|是|的|就是|然後|以及|還有)[，,。．.…\s]*$")
 SAME_MEANING = 85  # rapidfuzz score above which two reasons/constraints are one
@@ -268,14 +269,17 @@ class LiveSessionManager:
             if (real_engine and not self.session.frames) or not source:
                 return
             # Hard gates (the model's judgement alone over-anchors):
-            #  - the utterance must contain a pointing / screen word,
-            #  - it must be a whole sentence, not a dangling 「以及這個是…」,
-            #  - the vision step must be sure it saw the named thing.
+            #  - the vision step must be sure it saw the named thing, and
+            #  - unless it is *very* sure, the utterance must contain a pointing / screen
+            #    word and be a whole sentence, not a dangling 「以及這個是…」.
+            # The text gates are a hedge for uncertain vision. STT splits 「就是這個。」
+            # 「最新的智慧眼鏡…」 into two utterances that each fail one of them while the
+            # vision step saw the glasses at 0.92 both times; a confident look wins.
             confidence = float(event.args.get("confidence", 0.0))
+            weak_text = not DEICTIC.search(source.text) or _is_fragment(source.text)
             if real_engine and (
-                not DEICTIC.search(source.text)
-                or _is_fragment(source.text)
-                or confidence < ANCHOR_MIN_CONFIDENCE
+                confidence < ANCHOR_MIN_CONFIDENCE
+                or (weak_text and confidence < ANCHOR_SURE_CONFIDENCE)
             ):
                 self.recorder.note(
                     "anchor_skipped",

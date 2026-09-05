@@ -2,6 +2,7 @@ import asyncio
 
 from app.knowledge.store import KnowledgeStore
 from app.live.deictic import DEICTIC
+from app.live.events import ToolCall
 from app.live.session import (
     COMMIT,
     UNDECIDED,
@@ -10,7 +11,7 @@ from app.live.session import (
     _is_fragment,
     _same_meaning,
 )
-from app.models import Alert, Decision, GroundedEvent, MeetingSession
+from app.models import Alert, Decision, Frame, GroundedEvent, MeetingSession, TranscriptEntry
 
 
 def test_deictic_matches_pointing_and_screen_words_only() -> None:
@@ -168,5 +169,43 @@ def test_anchor_merge_is_a_safety_net_for_same_looking_objects() -> None:
             )
         )
         assert cup is not first and len(manager.session.grounded_events) == 2
+
+    asyncio.run(scenario())
+
+
+def test_confident_look_overrides_text_gates_but_weak_look_does_not() -> None:
+    """Session f9d3f01a: STT split 「就是這個，最新的智慧眼鏡…」 into a fragment and a sentence
+    with no pointing word; vision saw the glasses at 0.92 / 0.84 both times and both were
+    dropped. A confident look must anchor; an uncertain one still needs the wording."""
+
+    async def anchor(text: str, confidence: float) -> int:
+        manager = _manager()
+        manager.engine = object()  # not the mock engine: gates apply
+        manager.session.frames.append(Frame(ts=30.0, jpeg_b64="", reason="periodic"))
+        entry = TranscriptEntry(ts=35.5, speaker="我", text=text)
+        manager.session.transcript.append(entry)
+        manager.recorder.add_utterance(id=entry.id, ts=entry.ts, speaker="我", text=text)
+        await manager._handle_tool_call(
+            ToolCall(
+                name="create_anchor",
+                args={
+                    "target": "智慧眼鏡——雙手舉著的黑色裝置",
+                    "observation": "黑色圓形裝置",
+                    "confidence": confidence,
+                    "frame_id": manager.session.frames[0].id,
+                },
+                ts=35.5,
+                utterance_id=entry.id,
+            )
+        )
+        return len(manager.session.grounded_events)
+
+    async def scenario() -> None:
+        assert await anchor("啊,就是這個。", 0.92) == 1  # fragment, but vision is sure
+        assert await anchor("最新的智慧眼鏡由我們公司發布的", 0.84) == 1  # no pointer, sure
+        assert await anchor("啊,就是這個。", 0.7) == 0  # fragment + only fairly sure
+        assert await anchor("最新的智慧眼鏡由我們公司發布的", 0.7) == 0  # no pointer + fairly sure
+        assert await anchor("你看這個智慧眼鏡", 0.7) == 1  # proper pointing sentence is enough
+        assert await anchor("你看這個智慧眼鏡", 0.5) == 0  # vision not sure: never
 
     asyncio.run(scenario())
